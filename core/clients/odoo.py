@@ -306,7 +306,9 @@ class OdooClient:
         message_type: str = "comment",
     ) -> int:
         """
-        Post a message/note on a record.
+        Post a message/note on a record with proper HTML rendering.
+
+        Creates mail.message directly to ensure HTML is rendered correctly.
 
         Args:
             model: Odoo model name
@@ -317,13 +319,30 @@ class OdooClient:
         Returns:
             Message ID
         """
-        return self.execute(
-            model,
-            "message_post",
-            [record_id],
-            body=body,
-            message_type=message_type,
-        )
+        # Get the subtype for notes (mt_note) to render HTML properly
+        subtype_id = False
+        try:
+            subtype = self.search_read(
+                "ir.model.data",
+                [["module", "=", "mail"], ["name", "=", "mt_note"]],
+                fields=["res_id"],
+                limit=1,
+            )
+            if subtype:
+                subtype_id = subtype[0]["res_id"]
+        except Exception:
+            pass  # Fall back to no subtype
+
+        # Create mail.message directly for proper HTML rendering
+        message_vals = {
+            "model": model,
+            "res_id": record_id,
+            "body": body,
+            "message_type": message_type,
+            "subtype_id": subtype_id,
+        }
+
+        return self.create("mail.message", message_vals)
 
     def add_tag(
         self,
