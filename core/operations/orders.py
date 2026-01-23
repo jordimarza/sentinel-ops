@@ -53,17 +53,8 @@ class OrderOperations(BaseOperation):
         cutoff_date = datetime.utcnow() - timedelta(days=days)
         cutoff_str = cutoff_date.strftime("%Y-%m-%d")
 
-        domain = [
-            ("order_id.state", "=", "sale"),
-            ("order_id.date_order", "<", cutoff_str),
-            ("qty_delivered", ">", 0),
-            ("qty_delivered", "<", "product_uom_qty"),  # Partial delivery
-        ]
-
-        # Note: This domain requires checking qty_delivered < product_uom_qty
-        # which can be tricky in some Odoo versions. Alternative approach:
-        # 1. Fetch all lines with qty_delivered > 0 from old orders
-        # 2. Filter in Python where qty_delivered < product_uom_qty
+        # Note: Odoo domains can't compare two fields directly (qty_delivered < product_uom_qty)
+        # So we fetch lines with qty_delivered > 0 and filter in Python
 
         fields = [
             "id",
@@ -301,31 +292,22 @@ class OrderOperations(BaseOperation):
             qualifying_orders = []
 
             for order_id, shipping_lines_for_order in order_shipping_map.items():
-                # Count pending non-shipping lines
-                pending_non_shipping_count = self.odoo.search_count(
+                # Fetch all non-shipping lines and filter in Python
+                # (Odoo domains can't compare two fields directly)
+                non_shipping_lines = self.odoo.search_read(
                     self.SO_LINE_MODEL,
                     [
                         ("order_id", "=", order_id),
                         ("product_id", "not in", shipping_product_ids),
-                        ("qty_delivered", "<", "product_uom_qty"),
                     ],
+                    fields=["id", "product_uom_qty", "qty_delivered"],
                 )
 
-                # Alternative approach if search_count with < doesn't work:
-                # Fetch all non-shipping lines and filter in Python
-                if pending_non_shipping_count is None:
-                    non_shipping_lines = self.odoo.search_read(
-                        self.SO_LINE_MODEL,
-                        [
-                            ("order_id", "=", order_id),
-                            ("product_id", "not in", shipping_product_ids),
-                        ],
-                        fields=["id", "product_uom_qty", "qty_delivered"],
-                    )
-                    pending_non_shipping_count = sum(
-                        1 for line in non_shipping_lines
-                        if line["qty_delivered"] < line["product_uom_qty"]
-                    )
+                # Count lines where qty_delivered < product_uom_qty
+                pending_non_shipping_count = sum(
+                    1 for line in non_shipping_lines
+                    if line["qty_delivered"] < line["product_uom_qty"]
+                )
 
                 if pending_non_shipping_count == 0:
                     # Get order name
