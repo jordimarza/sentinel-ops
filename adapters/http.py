@@ -25,6 +25,28 @@ HttpResponse = Tuple[dict, int]
 PUBLIC_ENDPOINTS = {"/health", "/", ""}
 
 
+def get_valid_api_keys() -> set[str]:
+    """
+    Get all valid API keys from environment.
+
+    Supports:
+        - SENTINEL_API_KEY (single key, backwards compatible)
+        - SENTINEL_API_KEY_N8N, SENTINEL_API_KEY_MCP, etc. (per-platform keys)
+    """
+    keys = set()
+
+    # Single key (backwards compatible)
+    if os.getenv("SENTINEL_API_KEY"):
+        keys.add(os.getenv("SENTINEL_API_KEY"))
+
+    # Per-platform keys
+    for env_var, value in os.environ.items():
+        if env_var.startswith("SENTINEL_API_KEY_") and value:
+            keys.add(value)
+
+    return keys
+
+
 def validate_api_key(request: "Request") -> Optional[str]:
     """
     Validate API key from request headers.
@@ -36,12 +58,11 @@ def validate_api_key(request: "Request") -> Optional[str]:
     Returns:
         None if valid, error message if invalid
     """
-    # Get API key from environment/secrets
-    expected_key = os.getenv("SENTINEL_API_KEY", "")
+    valid_keys = get_valid_api_keys()
 
-    # If no API key configured, skip validation (for local dev)
-    if not expected_key:
-        logger.warning("SENTINEL_API_KEY not configured - API key validation disabled")
+    # If no API keys configured, skip validation (for local dev)
+    if not valid_keys:
+        logger.warning("No SENTINEL_API_KEY* configured - API key validation disabled")
         return None
 
     # Check X-API-Key header
@@ -56,7 +77,7 @@ def validate_api_key(request: "Request") -> Optional[str]:
     if not api_key:
         return "Missing API key. Use X-API-Key header or Authorization: Bearer"
 
-    if api_key != expected_key:
+    if api_key not in valid_keys:
         return "Invalid API key"
 
     return None
