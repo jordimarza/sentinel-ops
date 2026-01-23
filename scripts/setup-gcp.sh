@@ -123,7 +123,35 @@ create_secret "sentinel-ops-odoo-username" "Odoo username/email"
 create_secret "sentinel-ops-odoo-password" "Odoo API password"
 create_secret "sentinel-ops-bq-project" "BigQuery project ID"
 create_secret "sentinel-ops-bq-dataset" "BigQuery dataset name"
-create_secret "sentinel-ops-api-key" "API key for HTTP authentication (use: python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
+# API Keys (per-platform)
+echo ""
+echo -e "${GREEN}Creating API keys for each platform...${NC}"
+
+create_api_key_secret() {
+    local name=$1
+    local platform=$2
+
+    if [[ "$DRY_RUN" == true ]]; then
+        echo "Would create secret: $name (auto-generated)"
+        return
+    fi
+
+    if gcloud secrets describe "$name" --project="$CF_PROJECT" &>/dev/null; then
+        echo "Secret $name already exists (skipping)"
+    else
+        # Auto-generate a secure API key
+        API_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+        echo -n "$API_KEY" | gcloud secrets create "$name" --data-file=- --project="$CF_PROJECT"
+        echo "Created secret: $name"
+        echo "  → Key for $platform: $API_KEY"
+        echo "  → Save this key for configuring $platform!"
+    fi
+}
+
+create_api_key_secret "sentinel-ops-api-key-n8n" "n8n"
+create_api_key_secret "sentinel-ops-api-key-mcp" "MCP"
+create_api_key_secret "sentinel-ops-api-key-scheduler" "Cloud Scheduler"
 
 echo ""
 
