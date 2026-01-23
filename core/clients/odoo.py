@@ -304,6 +304,7 @@ class OdooClient:
         record_id: int,
         body: str,
         message_type: str = "comment",
+        attachments: Optional[list[dict]] = None,
     ) -> int:
         """
         Post a message/note on a record with proper HTML rendering.
@@ -315,9 +316,23 @@ class OdooClient:
             record_id: Record ID to post on
             body: Message body (HTML supported)
             message_type: Type of message ("comment", "notification", etc.)
+            attachments: Optional list of attachments, each dict with:
+                - name: Filename (e.g., "report.pdf")
+                - datas: Base64 encoded file content
+                - mimetype: Optional MIME type (e.g., "application/pdf")
 
         Returns:
             Message ID
+
+        Example with attachment:
+            import base64
+            with open("report.pdf", "rb") as f:
+                data = base64.b64encode(f.read()).decode()
+
+            odoo.message_post(
+                "sale.order", 123, "<p>See attached report</p>",
+                attachments=[{"name": "report.pdf", "datas": data}]
+            )
         """
         # Get the subtype for notes (mt_note) to render HTML properly
         subtype_id = False
@@ -333,6 +348,23 @@ class OdooClient:
         except Exception:
             pass  # Fall back to no subtype
 
+        # Create attachments first if provided
+        attachment_ids = []
+        if attachments:
+            for att in attachments:
+                att_vals = {
+                    "name": att["name"],
+                    "datas": att["datas"],
+                    "res_model": model,
+                    "res_id": record_id,
+                }
+                if "mimetype" in att:
+                    att_vals["mimetype"] = att["mimetype"]
+
+                att_id = self.create("ir.attachment", att_vals)
+                attachment_ids.append(att_id)
+                logger.debug(f"Created attachment {att['name']} with id={att_id}")
+
         # Create mail.message directly for proper HTML rendering
         message_vals = {
             "model": model,
@@ -341,6 +373,10 @@ class OdooClient:
             "message_type": message_type,
             "subtype_id": subtype_id,
         }
+
+        if attachment_ids:
+            # Link attachments using (6, 0, ids) = replace with these ids
+            message_vals["attachment_ids"] = [(6, 0, attachment_ids)]
 
         return self.create("mail.message", message_vals)
 
