@@ -139,7 +139,8 @@ class JobResult:
     def add_operation(self, result: OperationResult) -> None:
         """Add an operation result and update counters."""
         self.operations.append(result)
-        self.records_checked += 1
+        # Note: records_checked should be incremented by the job, not here
+        # since one record may have multiple operations
 
         if result.success:
             if result.action == "skipped":
