@@ -6,6 +6,7 @@ Routes HTTP requests to the appropriate handlers.
 
 import json
 import logging
+import os
 from typing import Any, Callable, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -20,13 +21,53 @@ logger = logging.getLogger(__name__)
 # Type alias for HTTP response
 HttpResponse = Tuple[dict, int]
 
+# Endpoints that don't require API key (for health checks)
+PUBLIC_ENDPOINTS = {"/health", "/", ""}
+
+
+def validate_api_key(request: "Request") -> Optional[str]:
+    """
+    Validate API key from request headers.
+
+    Accepts:
+        - X-API-Key: <key>
+        - Authorization: Bearer <key>
+
+    Returns:
+        None if valid, error message if invalid
+    """
+    # Get API key from environment/secrets
+    expected_key = os.getenv("SENTINEL_API_KEY", "")
+
+    # If no API key configured, skip validation (for local dev)
+    if not expected_key:
+        logger.warning("SENTINEL_API_KEY not configured - API key validation disabled")
+        return None
+
+    # Check X-API-Key header
+    api_key = request.headers.get("X-API-Key", "")
+
+    # Also check Authorization: Bearer header
+    if not api_key:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            api_key = auth_header[7:]  # Remove "Bearer " prefix
+
+    if not api_key:
+        return "Missing API key. Use X-API-Key header or Authorization: Bearer"
+
+    if api_key != expected_key:
+        return "Invalid API key"
+
+    return None
+
 
 def handle_request(request: "Request") -> HttpResponse:
     """
     Main HTTP request router.
 
     Routes:
-        POST /health - Health check
+        GET/POST /health - Health check (public)
         POST /jobs - List available jobs
         POST /execute - Execute a job
         POST /query - Query job results (future)
@@ -38,6 +79,12 @@ def handle_request(request: "Request") -> HttpResponse:
         Tuple of (response_dict, status_code)
     """
     path = request.path.rstrip("/")
+
+    # Validate API key for protected endpoints
+    if path not in PUBLIC_ENDPOINTS:
+        error = validate_api_key(request)
+        if error:
+            return {"error": error}, 401
 
     # Route to appropriate handler
     routes: dict[str, Callable[["Request"], HttpResponse]] = {

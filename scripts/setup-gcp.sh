@@ -123,6 +123,7 @@ create_secret "sentinel-ops-odoo-username" "Odoo username/email"
 create_secret "sentinel-ops-odoo-password" "Odoo API password"
 create_secret "sentinel-ops-bq-project" "BigQuery project ID"
 create_secret "sentinel-ops-bq-dataset" "BigQuery dataset name"
+create_secret "sentinel-ops-api-key" "API key for HTTP authentication (use: python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 echo ""
 
