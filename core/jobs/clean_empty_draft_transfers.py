@@ -102,13 +102,19 @@ class CleanEmptyDraftTransfersJob(BaseJob):
 
             self.log.info(f"Processing {len(picking_ids)} picking IDs from input")
 
-            # Verify they're actually empty drafts
+            # Verify they're actually empty drafts (track skip reasons)
+            input_skip_reasons: dict[str, int] = {}
             for picking_id in picking_ids:
-                picking_data = self._verify_empty_draft(picking_id)
+                picking_data, skip_reason = self._verify_empty_draft(picking_id)
                 if picking_data:
                     pickings_to_process.append(picking_data)
                 else:
                     result.records_skipped += 1
+                    if skip_reason:
+                        input_skip_reasons[skip_reason] = input_skip_reasons.get(skip_reason, 0) + 1
+
+            # Store for KPIs (input verification skips)
+            result.data["input_skip_reasons"] = input_skip_reasons
 
         elif discover_from_odoo:
             # Discover from Odoo directly
@@ -124,7 +130,7 @@ class CleanEmptyDraftTransfersJob(BaseJob):
 
         if not pickings_to_process:
             self.log.info("No empty draft pickings found")
-            result.kpis = self._build_kpis(result, 0, 0, 0)
+            result.kpis = self._build_kpis(result, 0, 0, 0, {})
             result.complete()
             return result
 
@@ -133,6 +139,7 @@ class CleanEmptyDraftTransfersJob(BaseJob):
         # Track KPIs
         cancelled_count = 0
         deleted_count = 0
+        skip_reasons: dict[str, int] = {}
 
         # Process each picking
         for picking in pickings_to_process:
@@ -141,13 +148,15 @@ class CleanEmptyDraftTransfersJob(BaseJob):
             picking_name = picking.get("name", f"picking-{picking_id}")
 
             # Always verify with Odoo before processing (BQ data can be stale)
-            verified = self._verify_empty_draft(picking_id)
+            verified, skip_reason = self._verify_empty_draft(picking_id)
             if not verified:
                 self.log.info(
-                    f"Skipping {picking_name}: no longer empty draft (BQ data stale)",
+                    f"Skipping {picking_name}: {skip_reason} (BQ data stale)",
                     record_id=picking_id,
                 )
                 result.records_skipped += 1
+                if skip_reason:
+                    skip_reasons[skip_reason] = skip_reasons.get(skip_reason, 0) + 1
                 continue
 
             try:
@@ -171,15 +180,16 @@ class CleanEmptyDraftTransfersJob(BaseJob):
                 )
                 result.errors.append(f"Picking {picking_name}: {e}")
 
-        result.kpis = self._build_kpis(result, cancelled_count, deleted_count, len(pickings_to_process))
+        result.kpis = self._build_kpis(result, cancelled_count, deleted_count, len(pickings_to_process), skip_reasons)
         result.complete()
         return result
 
-    def _verify_empty_draft(self, picking_id: int) -> Optional[dict]:
+    def _verify_empty_draft(self, picking_id: int) -> tuple[Optional[dict], Optional[str]]:
         """
         Verify a picking is in draft state with no moves.
 
-        Returns picking dict if valid, None otherwise.
+        Returns:
+            Tuple of (picking dict or None, skip_reason or None)
         """
         try:
             pickings = self.odoo.search_read(
@@ -190,7 +200,7 @@ class CleanEmptyDraftTransfersJob(BaseJob):
 
             if not pickings:
                 self.log.warning(f"Picking {picking_id} not found")
-                return None
+                return None, "not_found"
 
             picking = pickings[0]
 
@@ -199,7 +209,7 @@ class CleanEmptyDraftTransfersJob(BaseJob):
                     picking_id,
                     f"Picking {picking['name']} is not in draft state (state={picking.get('state')})",
                 )
-                return None
+                return None, "not_draft"
 
             move_ids = picking.get("move_ids", [])
             if move_ids:
@@ -207,13 +217,13 @@ class CleanEmptyDraftTransfersJob(BaseJob):
                     picking_id,
                     f"Picking {picking['name']} has {len(move_ids)} moves - not empty",
                 )
-                return None
+                return None, "has_moves"
 
-            return picking
+            return picking, None
 
         except Exception as e:
             self.log.error(f"Error verifying picking {picking_id}", error=str(e))
-            return None
+            return None, "error"
 
     def _discover_empty_drafts_bq(self, limit: Optional[int]) -> tuple[list[dict], Optional[str]]:
         """
@@ -363,15 +373,21 @@ class CleanEmptyDraftTransfersJob(BaseJob):
         cancelled: int,
         deleted: int,
         total_found: int,
+        skip_reasons: dict[str, int],
     ) -> dict:
         """Build KPIs dict for the job result."""
-        return {
+        kpis = {
             "pickings_found": total_found,
             "pickings_cancelled": cancelled,
             "pickings_deleted": deleted,
             "pickings_cleaned": cancelled + deleted,
+            "pickings_skipped": sum(skip_reasons.values()),
             "exceptions": len(result.errors),
         }
+        # Add skip reasons breakdown if any
+        if skip_reasons:
+            kpis["skip_reasons"] = skip_reasons
+        return kpis
 
 
 if __name__ == "__main__":
