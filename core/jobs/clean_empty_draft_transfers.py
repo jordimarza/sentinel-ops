@@ -140,6 +140,16 @@ class CleanEmptyDraftTransfersJob(BaseJob):
             picking_id = picking["id"]
             picking_name = picking.get("name", f"picking-{picking_id}")
 
+            # Always verify with Odoo before processing (BQ data can be stale)
+            verified = self._verify_empty_draft(picking_id)
+            if not verified:
+                self.log.info(
+                    f"Skipping {picking_name}: no longer empty draft (BQ data stale)",
+                    record_id=picking_id,
+                )
+                result.records_skipped += 1
+                continue
+
             try:
                 if delete_instead_of_cancel:
                     op_result = self._delete_picking(picking_id, picking_name)
