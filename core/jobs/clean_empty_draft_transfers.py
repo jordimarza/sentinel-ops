@@ -118,7 +118,9 @@ class CleanEmptyDraftTransfersJob(BaseJob):
         else:
             # Default: Discover from BQ
             self.log.info("Discovering empty draft pickings from BigQuery")
-            pickings_to_process = self._discover_empty_drafts_bq(limit)
+            pickings_to_process, bq_error = self._discover_empty_drafts_bq(limit)
+            if bq_error:
+                result.errors.append(bq_error)
 
         if not pickings_to_process:
             self.log.info("No empty draft pickings found")
@@ -203,9 +205,12 @@ class CleanEmptyDraftTransfersJob(BaseJob):
             self.log.error(f"Error verifying picking {picking_id}", error=str(e))
             return None
 
-    def _discover_empty_drafts_bq(self, limit: Optional[int]) -> list[dict]:
+    def _discover_empty_drafts_bq(self, limit: Optional[int]) -> tuple[list[dict], Optional[str]]:
         """
         Discover empty draft pickings from BigQuery.
+
+        Returns:
+            Tuple of (pickings list, error message or None)
         """
         query = self.BQ_QUERY
         if limit:
@@ -225,10 +230,11 @@ class CleanEmptyDraftTransfersJob(BaseJob):
                     "origin": row.get("origin"),
                 })
             self.log.info(f"Found {len(pickings)} empty draft pickings from BQ")
-            return pickings
+            return pickings, None
         except Exception as e:
-            self.log.error(f"BQ query failed: {e}", error=str(e))
-            return []
+            error_msg = f"BQ query failed: {e}"
+            self.log.error(error_msg, error=str(e))
+            return [], error_msg
 
     def _discover_empty_drafts_odoo(self, limit: Optional[int]) -> list[dict]:
         """

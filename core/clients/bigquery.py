@@ -661,8 +661,15 @@ class NoOpBigQueryClient(BigQueryClient):
         return True
 
     def query(self, sql: str, params: Optional[dict] = None) -> list[dict]:
-        logger.info(f"[NOOP QUERY] {sql}")
-        return []
+        logger.warning(
+            "[NOOP QUERY] BigQuery not configured - returning empty results. "
+            "Set BQ_PROJECT env var or bq-project secret to enable BQ queries."
+        )
+        logger.debug(f"[NOOP QUERY] Would have executed: {sql[:200]}...")
+        raise RuntimeError(
+            "BigQuery not configured. Set BQ_PROJECT env var or bq-project secret. "
+            "Query cannot be executed in NoOp mode."
+        )
 
     def ensure_tables(self) -> None:
         logger.info("[NOOP] Would ensure tables exist")
