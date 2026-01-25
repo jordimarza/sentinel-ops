@@ -143,14 +143,14 @@ class CleanEmptyDraftTransfersJob(BaseJob):
             try:
                 if delete_instead_of_cancel:
                     op_result = self._delete_picking(picking_id, picking_name)
-                    if op_result.success:
+                    if op_result.success and op_result.action != "skipped":
                         deleted_count += 1
                 else:
                     op_result = self._cancel_picking(picking_id, picking_name)
-                    if op_result.success:
+                    if op_result.success and op_result.action != "skipped":
                         cancelled_count += 1
 
-                # add_operation handles records_updated increment
+                # add_operation handles records_updated/skipped increment
                 result.add_operation(op_result)
 
             except Exception as e:
