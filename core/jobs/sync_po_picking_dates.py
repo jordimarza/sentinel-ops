@@ -40,9 +40,37 @@ class SyncPOPickingDatesJob(BaseJob):
        - Update both picking and move dates
 
     Data Source:
-    - candidates: Full BQ result with granular flags (preferred)
-    - po_ids: Simple PO ID list (does full sync)
-    - picking_ids: Simple picking ID list (does header sync)
+    - BQ query (auto-discovery) or explicit candidates/po_ids/picking_ids
+    """
+
+    # BQ query to find PO picking date mismatches
+    BQ_QUERY = """
+    WITH picking_base AS (
+        SELECT po.id AS po_id, po.name AS po_name, po.date_planned AS po_date_planned,
+               sp.id AS picking_id, sp.name AS picking_name, sp.scheduled_date,
+               DATE(sp.scheduled_date) != DATE(po.date_planned) AS needs_header_update
+        FROM `alohas-analytics.prod_staging.stg_odoo__purchase_order` po
+        JOIN `alohas-analytics.prod_staging.stg_bq_odoo__stock_picking` sp
+            ON sp.origin = po.name
+        WHERE sp.state NOT IN ('done', 'cancel')
+          AND po.date_planned IS NOT NULL
+    ),
+    move_details AS (
+        SELECT sm.picking_id, pol.id AS pol_id, pol.product_id,
+               pol.date_planned AS pol_date_planned, sm.id AS move_id,
+               sm.date AS move_date,
+               DATE(sm.date) != DATE(pol.date_planned) AS needs_line_update
+        FROM `alohas-analytics.prod_staging.stg_odoo__purchase_order_line` pol
+        JOIN `alohas-analytics.prod_staging.stg_odoo__stock_move` sm
+            ON sm.purchase_line_id = pol.id
+        WHERE sm.state NOT IN ('done', 'cancel')
+    )
+    SELECT pb.*, md.pol_id, md.product_id, md.pol_date_planned,
+           md.move_id, md.move_date, md.needs_line_update
+    FROM picking_base pb
+    LEFT JOIN move_details md ON md.picking_id = pb.picking_id
+    WHERE pb.needs_header_update = TRUE
+       OR md.needs_line_update = TRUE
     """
 
     def run(
@@ -78,6 +106,18 @@ class SyncPOPickingDatesJob(BaseJob):
             "limit": limit,
             "sync_line_level": sync_line_level,
         })
+
+        # Discover from BQ if no explicit inputs provided
+        if not candidates and not po_ids and not picking_ids:
+            self.log.info("No explicit inputs provided - discovering from BigQuery")
+            candidates, bq_error = self._discover_from_bq(limit)
+            if bq_error:
+                result.errors.append(bq_error)
+            if not candidates:
+                self.log.info("No PO picking date mismatches found")
+                result.kpis = self._build_kpis(result, 0, 0, 0, 0)
+                result.complete()
+                return result
 
         # Route to appropriate handler based on input
         if candidates:
@@ -254,6 +294,43 @@ class SyncPOPickingDatesJob(BaseJob):
                 except ValueError:
                     return None
         return None
+
+    def _discover_from_bq(self, limit: Optional[int]) -> tuple[list[dict], Optional[str]]:
+        """
+        Discover PO picking date mismatches from BigQuery.
+
+        Returns:
+            Tuple of (candidates list, error message or None)
+        """
+        query = self.BQ_QUERY
+        if limit:
+            query += f"\nLIMIT {limit}"
+
+        try:
+            rows = self.bq.query(query)
+            candidates = []
+            for row in rows:
+                candidates.append({
+                    "po_id": row.get("po_id"),
+                    "po_name": row.get("po_name"),
+                    "po_date_planned": row.get("po_date_planned"),
+                    "picking_id": row.get("picking_id"),
+                    "picking_name": row.get("picking_name"),
+                    "scheduled_date": row.get("scheduled_date"),
+                    "needs_header_update": row.get("needs_header_update", False),
+                    "pol_id": row.get("pol_id"),
+                    "product_id": row.get("product_id"),
+                    "pol_date_planned": row.get("pol_date_planned"),
+                    "move_id": row.get("move_id"),
+                    "move_date": row.get("move_date"),
+                    "needs_line_update": row.get("needs_line_update", False),
+                })
+            self.log.info(f"Found {len(candidates)} PO picking date mismatches from BQ")
+            return candidates, None
+        except Exception as e:
+            error_msg = f"BQ query failed: {e}"
+            self.log.error(error_msg, error=str(e))
+            return [], error_msg
 
     def _process_simple(
         self,

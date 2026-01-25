@@ -40,8 +40,23 @@ class SyncSOPickingDatesJob(BaseJob):
     4. Post chatter message
 
     Data Source:
-    - Explicit order_ids parameter (from check_ar_hold_violations or direct)
-    - Optional: BQ query for additional mismatches
+    - BQ query (auto-discovery) or explicit order_ids/picking_ids parameter
+    """
+
+    # BQ query to find SO picking date mismatches
+    BQ_QUERY = """
+    SELECT
+        so.id AS order_id,
+        so.name AS order_name,
+        so.commitment_date,
+        sp.id AS picking_id,
+        sp.name AS picking_name,
+        sp.scheduled_date
+    FROM `alohas-analytics.prod_staging.stg_odoo__sales` so
+    JOIN `alohas-analytics.prod_staging.stg_bq_odoo__stock_picking` sp ON sp.sale_id = so.id
+    WHERE sp.state NOT IN ('done', 'cancel')
+      AND so.commitment_date IS NOT NULL
+      AND (DATE(sp.scheduled_date) != DATE(so.commitment_date))
     """
 
     def run(
@@ -79,6 +94,18 @@ class SyncSOPickingDatesJob(BaseJob):
         pickings_checked = 0
         pickings_updated = 0
         moves_updated = 0
+
+        # Discover from BQ if no explicit IDs provided
+        if not order_ids and not picking_ids:
+            self.log.info("No explicit IDs provided - discovering from BigQuery")
+            picking_ids, bq_error = self._discover_from_bq(limit)
+            if bq_error:
+                result.errors.append(bq_error)
+            if not picking_ids:
+                self.log.info("No SO picking date mismatches found")
+                result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated)
+                result.complete()
+                return result
 
         # Collect pickings to process
         pickings_to_process = []
@@ -312,6 +339,27 @@ class SyncSOPickingDatesJob(BaseJob):
 
         result.complete()
         return result
+
+    def _discover_from_bq(self, limit: Optional[int]) -> tuple[list[int], Optional[str]]:
+        """
+        Discover SO picking date mismatches from BigQuery.
+
+        Returns:
+            Tuple of (picking_ids list, error message or None)
+        """
+        query = self.BQ_QUERY
+        if limit:
+            query += f"\nLIMIT {limit}"
+
+        try:
+            rows = self.bq.query(query)
+            picking_ids = [row.get("picking_id") for row in rows if row.get("picking_id")]
+            self.log.info(f"Found {len(picking_ids)} SO picking date mismatches from BQ")
+            return picking_ids, None
+        except Exception as e:
+            error_msg = f"BQ query failed: {e}"
+            self.log.error(error_msg, error=str(e))
+            return [], error_msg
 
     def _build_kpis(
         self,

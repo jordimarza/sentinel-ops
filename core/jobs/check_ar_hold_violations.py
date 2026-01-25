@@ -41,7 +41,37 @@ class CheckArHoldViolationsJob(BaseJob):
     5. Post chatter message
 
     Data Source:
-    - BQ query (user-provided) or explicit order_ids parameter
+    - BQ query (auto-discovery) or explicit order_ids parameter
+    """
+
+    # BQ query to find AR-HOLD violation candidates
+    BQ_QUERY = """
+    WITH blocked_partners AS (
+        SELECT DISTINCT rel.partner_id
+        FROM `alohas-analytics.prod_staging.base_bq_odoo_res_partner_res_partner_category_rel` rel
+        JOIN `alohas-analytics.prod_staging.base_bq_odoo_res_partner_category` cat
+            ON cat.id = rel.category_id
+        WHERE LOWER(cat.name.en_us) LIKE '%block%'
+    )
+    SELECT
+        so.id AS order_id,
+        so.name AS order_name,
+        so.partner_id,
+        rp.name AS partner_name,
+        so.ah_status,
+        so.x_studio_cancel_date AS ah_cancel_date,
+        so.commitment_date
+    FROM `alohas-analytics.prod_staging.stg_odoo__sales` so
+    JOIN `alohas-analytics.prod_staging.stg_bq_odoo__stock_picking` sp ON sp.sale_id = so.id
+    JOIN `alohas-analytics.prod_staging.stg_odoo__res_partner` rp ON rp.id = so.partner_id
+    WHERE CURRENT_TIMESTAMP() > so.x_studio_cancel_date
+      AND CURRENT_TIMESTAMP() > so.commitment_date
+      AND sp.state NOT IN ('cancel')
+      AND so.ah_status NOT IN ('shipped', 'delivered', 'customer-warehouse', 'cancelled', 'closed')
+      AND (rp.id IN (SELECT partner_id FROM blocked_partners)
+           OR rp.parent_id IN (SELECT partner_id FROM blocked_partners)
+           OR rp.commercial_partner_id IN (SELECT partner_id FROM blocked_partners))
+    GROUP BY 1, 2, 3, 4, 5, 6, 7
     """
 
     def run(
@@ -75,11 +105,17 @@ class CheckArHoldViolationsJob(BaseJob):
         # Initialize data for passing to next job
         result.data["processed_order_ids"] = []
 
+        # Discover from BQ if no explicit order_ids
         if not order_ids:
-            self.log.info("No order_ids provided - nothing to process")
-            result.kpis = self._build_kpis(result, 0, 0, 0, 0)
-            result.complete()
-            return result
+            self.log.info("No order_ids provided - discovering from BigQuery")
+            order_ids, bq_error = self._discover_from_bq(limit)
+            if bq_error:
+                result.errors.append(bq_error)
+            if not order_ids:
+                self.log.info("No AR-HOLD violation candidates found")
+                result.kpis = self._build_kpis(result, 0, 0, 0, 0)
+                result.complete()
+                return result
 
         # Apply limit if specified
         if limit and len(order_ids) > limit:
@@ -248,6 +284,27 @@ class CheckArHoldViolationsJob(BaseJob):
 
         result.complete()
         return result
+
+    def _discover_from_bq(self, limit: Optional[int]) -> tuple[list[int], Optional[str]]:
+        """
+        Discover AR-HOLD violation candidates from BigQuery.
+
+        Returns:
+            Tuple of (order_ids list, error message or None)
+        """
+        query = self.BQ_QUERY
+        if limit:
+            query += f"\nLIMIT {limit}"
+
+        try:
+            rows = self.bq.query(query)
+            order_ids = [row.get("order_id") for row in rows if row.get("order_id")]
+            self.log.info(f"Found {len(order_ids)} AR-HOLD violation candidates from BQ")
+            return order_ids, None
+        except Exception as e:
+            error_msg = f"BQ query failed: {e}"
+            self.log.error(error_msg, error=str(e))
+            return [], error_msg
 
     def _build_kpis(
         self,
