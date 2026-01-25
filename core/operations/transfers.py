@@ -64,6 +64,117 @@ class TransferOperations(BaseOperation):
             # Conservative: assume there are open moves if we can't check
             return True
 
+    def get_lines_with_open_moves(
+        self,
+        sale_line_ids: list[int],
+    ) -> set[int]:
+        """
+        Get set of sale line IDs that have open (unprocessed) stock moves.
+
+        This is a BATCH operation - much more efficient than checking per-line.
+        Single query to get all open moves for all lines.
+
+        Args:
+            sale_line_ids: List of sale order line IDs to check
+
+        Returns:
+            Set of line IDs that have open moves
+        """
+        if not sale_line_ids:
+            return set()
+
+        try:
+            # Single query: get all open moves for all lines
+            open_moves = self.odoo.search_read(
+                self.MOVE_MODEL,
+                [
+                    ("sale_line_id", "in", sale_line_ids),
+                    ("state", "not in", ["done", "cancel"]),
+                ],
+                fields=["sale_line_id"],
+            )
+
+            # Extract unique line IDs that have open moves
+            lines_with_moves = {
+                m["sale_line_id"][0] if isinstance(m["sale_line_id"], (list, tuple))
+                else m["sale_line_id"]
+                for m in open_moves
+                if m["sale_line_id"]
+            }
+
+            self.log.info(
+                f"Found {len(lines_with_moves)} lines with open moves (out of {len(sale_line_ids)} checked)"
+            )
+
+            return lines_with_moves
+
+        except Exception as e:
+            self.log.error(
+                f"Failed to batch check open moves for {len(sale_line_ids)} lines",
+                error=str(e),
+            )
+            # Conservative: assume ALL have open moves if we can't check
+            return set(sale_line_ids)
+
+    def get_open_moves_by_line(
+        self,
+        sale_line_ids: list[int],
+    ) -> dict[int, list[dict]]:
+        """
+        Get open stock moves grouped by sale line ID.
+
+        Returns move details so caller can check if pending qty matches.
+
+        Args:
+            sale_line_ids: List of sale order line IDs to check
+
+        Returns:
+            Dict mapping line_id -> list of open moves with qty info
+        """
+        if not sale_line_ids:
+            return {}
+
+        try:
+            # Single query: get all open moves with qty details
+            open_moves = self.odoo.search_read(
+                self.MOVE_MODEL,
+                [
+                    ("sale_line_id", "in", sale_line_ids),
+                    ("state", "not in", ["done", "cancel"]),
+                ],
+                fields=["sale_line_id", "product_uom_qty", "state"],
+            )
+
+            # Group by line ID
+            from collections import defaultdict
+            moves_by_line: dict[int, list[dict]] = defaultdict(list)
+
+            for move in open_moves:
+                line_id = (
+                    move["sale_line_id"][0]
+                    if isinstance(move["sale_line_id"], (list, tuple))
+                    else move["sale_line_id"]
+                )
+                if line_id:
+                    moves_by_line[line_id].append({
+                        "qty": move["product_uom_qty"],
+                        "state": move["state"],
+                    })
+
+            self.log.info(
+                f"Found open moves for {len(moves_by_line)} lines (out of {len(sale_line_ids)} checked)"
+            )
+
+            return dict(moves_by_line)
+
+        except Exception as e:
+            self.log.error(
+                f"Failed to batch get open moves for {len(sale_line_ids)} lines",
+                error=str(e),
+            )
+            # Return empty - caller should handle conservatively
+            return {}
+
     def get_moves_for_line(
         self,
         sale_line_id: int,
@@ -226,3 +337,71 @@ class TransferOperations(BaseOperation):
                 error=str(e),
             )
             return None
+
+    def post_picking_cancelled_message(
+        self,
+        picking_id: int,
+        picking_name: str,
+        reason: str,
+        job_name: str = "clean_empty_draft_transfers",
+    ) -> OperationResult:
+        """
+        Post a chatter message when a picking is cancelled by SentinelOps.
+
+        Args:
+            picking_id: Stock picking ID
+            picking_name: Picking reference name
+            reason: Reason for cancellation
+            job_name: Name of the job that triggered this
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        body = f"""<div class="o_mail_notification">
+<b>[SentinelOps] Transfer Cancelled</b><br/>
+<b>Reason:</b> {reason}<br/>
+<b>Job:</b> {job_name}
+</div>"""
+
+        return self._safe_message_post(
+            model=self.PICKING_MODEL,
+            record_id=picking_id,
+            body=body,
+            message_type="notification",
+            record_name=picking_name,
+        )
+
+    def post_picking_deleted_message(
+        self,
+        picking_id: int,
+        picking_name: str,
+        reason: str,
+        job_name: str = "clean_empty_draft_transfers",
+    ) -> OperationResult:
+        """
+        Post a chatter message before a picking is deleted by SentinelOps.
+
+        Note: This must be called BEFORE the delete, as the record won't exist after.
+
+        Args:
+            picking_id: Stock picking ID
+            picking_name: Picking reference name
+            reason: Reason for deletion
+            job_name: Name of the job that triggered this
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        body = f"""<div class="o_mail_notification">
+<b>[SentinelOps] Transfer Deleted</b><br/>
+<b>Reason:</b> {reason}<br/>
+<b>Job:</b> {job_name}
+</div>"""
+
+        return self._safe_message_post(
+            model=self.PICKING_MODEL,
+            record_id=picking_id,
+            body=body,
+            message_type="notification",
+            record_name=picking_name,
+        )
