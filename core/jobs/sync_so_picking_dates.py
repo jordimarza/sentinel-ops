@@ -94,6 +94,7 @@ class SyncSOPickingDatesJob(BaseJob):
         pickings_checked = 0
         pickings_updated = 0
         moves_updated = 0
+        skip_reasons: dict[str, int] = {}
 
         # Discover from BQ if no explicit IDs provided
         if not order_ids and not picking_ids:
@@ -103,7 +104,7 @@ class SyncSOPickingDatesJob(BaseJob):
                 result.errors.append(bq_error)
             if not picking_ids:
                 self.log.info("No SO picking date mismatches found")
-                result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated)
+                result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated, {})
                 result.complete()
                 return result
 
@@ -238,7 +239,7 @@ class SyncSOPickingDatesJob(BaseJob):
 
         if not pickings_to_process:
             self.log.info("No pickings to process")
-            result.kpis = self._build_kpis(result, 0, 0, 0)
+            result.kpis = self._build_kpis(result, 0, 0, 0, {})
             result.complete()
             return result
 
@@ -279,6 +280,7 @@ class SyncSOPickingDatesJob(BaseJob):
 
                 if not needs_update:
                     result.records_skipped += 1
+                    skip_reasons["dates_match"] = skip_reasons.get("dates_match", 0) + 1
                     continue
 
                 # Sync picking dates
@@ -335,7 +337,7 @@ class SyncSOPickingDatesJob(BaseJob):
                 result.errors.append(f"Picking {picking_name}: {e}")
 
         # Set KPIs
-        result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated)
+        result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated, skip_reasons)
 
         result.complete()
         return result
@@ -367,14 +369,19 @@ class SyncSOPickingDatesJob(BaseJob):
         pickings_checked: int,
         pickings_updated: int,
         moves_updated: int,
+        skip_reasons: dict[str, int],
     ) -> dict:
         """Build KPIs dict for the job result."""
-        return {
+        kpis = {
             "pickings_checked": pickings_checked,
             "pickings_updated": pickings_updated,
+            "pickings_skipped": sum(skip_reasons.values()),
             "moves_updated": moves_updated,
             "exceptions": len(result.errors),
         }
+        if skip_reasons:
+            kpis["skip_reasons"] = skip_reasons
+        return kpis
 
 
 if __name__ == "__main__":

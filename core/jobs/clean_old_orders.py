@@ -93,6 +93,9 @@ class CleanOldOrdersJob(BaseJob):
 
         self.log.info(f"Found {len(lines)} partial order lines to process")
 
+        # Track skip reasons
+        skip_reasons: dict[str, int] = {}
+
         # Step 2 & 3: Process each line
         for line in lines:
             line_id = line["id"]
@@ -107,6 +110,7 @@ class CleanOldOrdersJob(BaseJob):
                     self.log.skip(line_id, "Has open stock moves")
                     result.records_skipped += 1
                     result.records_checked += 1
+                    skip_reasons["has_open_moves"] = skip_reasons.get("has_open_moves", 0) + 1
                     continue
 
                 # Adjust quantity to delivered
@@ -147,8 +151,11 @@ class CleanOldOrdersJob(BaseJob):
         result.kpis = {
             "lines_checked": result.records_checked,
             "lines_updated": result.records_updated,
+            "lines_skipped": sum(skip_reasons.values()),
             "exceptions": len(result.errors),
         }
+        if skip_reasons:
+            result.kpis["skip_reasons"] = skip_reasons
 
         result.complete()
         return result

@@ -115,7 +115,7 @@ class SyncPOPickingDatesJob(BaseJob):
                 result.errors.append(bq_error)
             if not candidates:
                 self.log.info("No PO picking date mismatches found")
-                result.kpis = self._build_kpis(result, 0, 0, 0, 0)
+                result.kpis = self._build_kpis(result, 0, 0, 0, 0, {})
                 result.complete()
                 return result
 
@@ -350,6 +350,7 @@ class SyncPOPickingDatesJob(BaseJob):
         pickings_updated = 0
         moves_updated = 0
         line_level_moves_updated = 0
+        skip_reasons: dict[str, int] = {}
 
         # Collect POs to process
         pos_to_process = []
@@ -469,7 +470,7 @@ class SyncPOPickingDatesJob(BaseJob):
 
         if not pos_to_process:
             self.log.info("No purchase orders to process")
-            result.kpis = self._build_kpis(result, 0, 0, 0, 0)
+            result.kpis = self._build_kpis(result, 0, 0, 0, 0, {})
             result.complete()
             return result
 
@@ -490,6 +491,7 @@ class SyncPOPickingDatesJob(BaseJob):
 
                 if not pickings:
                     result.records_skipped += 1
+                    skip_reasons["no_open_pickings"] = skip_reasons.get("no_open_pickings", 0) + 1
                     continue
 
                 po_pickings_updated = 0
@@ -574,6 +576,7 @@ class SyncPOPickingDatesJob(BaseJob):
                     )
                 else:
                     result.records_skipped += 1
+                    skip_reasons["dates_match"] = skip_reasons.get("dates_match", 0) + 1
 
             except Exception as e:
                 self.log.error(
@@ -585,7 +588,7 @@ class SyncPOPickingDatesJob(BaseJob):
 
         # Set KPIs
         result.kpis = self._build_kpis(
-            result, pos_checked, pickings_updated, moves_updated, line_level_moves_updated
+            result, pos_checked, pickings_updated, moves_updated, line_level_moves_updated, skip_reasons
         )
 
         result.complete()
@@ -598,15 +601,20 @@ class SyncPOPickingDatesJob(BaseJob):
         pickings_updated: int,
         moves_updated: int,
         line_level_moves_updated: int,
+        skip_reasons: dict[str, int],
     ) -> dict:
         """Build KPIs dict for the job result."""
-        return {
+        kpis = {
             "pos_checked": pos_checked,
             "pickings_updated": pickings_updated,
+            "pos_skipped": sum(skip_reasons.values()),
             "moves_updated": moves_updated,
             "line_level_moves_updated": line_level_moves_updated,
             "exceptions": len(result.errors),
         }
+        if skip_reasons:
+            kpis["skip_reasons"] = skip_reasons
+        return kpis
 
 
 if __name__ == "__main__":

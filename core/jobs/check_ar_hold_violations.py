@@ -113,7 +113,7 @@ class CheckArHoldViolationsJob(BaseJob):
                 result.errors.append(bq_error)
             if not order_ids:
                 self.log.info("No AR-HOLD violation candidates found")
-                result.kpis = self._build_kpis(result, 0, 0, 0, 0)
+                result.kpis = self._build_kpis(result, 0, 0, 0, {})
                 result.complete()
                 return result
 
@@ -131,9 +131,9 @@ class CheckArHoldViolationsJob(BaseJob):
 
         # Track KPIs
         orders_processed = 0
-        orders_skipped_no_block = 0
         pickings_updated = 0
         moves_updated = 0
+        skip_reasons: dict[str, int] = {}
 
         # Process each order
         for order_id in order_ids:
@@ -150,6 +150,7 @@ class CheckArHoldViolationsJob(BaseJob):
                 if not orders:
                     self.log.warning(f"Order {order_id} not found")
                     result.records_skipped += 1
+                    skip_reasons["not_found"] = skip_reasons.get("not_found", 0) + 1
                     continue
 
                 order = orders[0]
@@ -164,8 +165,8 @@ class CheckArHoldViolationsJob(BaseJob):
                             order_id,
                             f"Partner does not have block tag - skipping {order_name}",
                         )
-                        orders_skipped_no_block += 1
                         result.records_skipped += 1
+                        skip_reasons["no_block_tag"] = skip_reasons.get("no_block_tag", 0) + 1
                         continue
 
                 # Parse current commitment_date
@@ -175,6 +176,7 @@ class CheckArHoldViolationsJob(BaseJob):
                         f"Order {order_name} has no commitment_date - skipping"
                     )
                     result.records_skipped += 1
+                    skip_reasons["no_commitment_date"] = skip_reasons.get("no_commitment_date", 0) + 1
                     continue
 
                 if isinstance(commitment_date_str, str):
@@ -278,8 +280,7 @@ class CheckArHoldViolationsJob(BaseJob):
 
         # Set KPIs
         result.kpis = self._build_kpis(
-            result, orders_processed, orders_skipped_no_block,
-            pickings_updated, moves_updated
+            result, orders_processed, pickings_updated, moves_updated, skip_reasons
         )
 
         result.complete()
@@ -310,19 +311,22 @@ class CheckArHoldViolationsJob(BaseJob):
         self,
         result: JobResult,
         orders_processed: int,
-        orders_skipped_no_block: int,
         pickings_updated: int,
         moves_updated: int,
+        skip_reasons: dict[str, int],
     ) -> dict:
         """Build KPIs dict for the job result."""
-        return {
+        kpis = {
             "orders_checked": result.records_checked,
             "orders_processed": orders_processed,
-            "orders_skipped_no_block": orders_skipped_no_block,
+            "orders_skipped": sum(skip_reasons.values()),
             "pickings_updated": pickings_updated,
             "moves_updated": moves_updated,
             "exceptions": len(result.errors),
         }
+        if skip_reasons:
+            kpis["skip_reasons"] = skip_reasons
+        return kpis
 
 
 if __name__ == "__main__":
