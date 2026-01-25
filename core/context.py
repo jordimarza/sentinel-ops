@@ -2,10 +2,16 @@
 Request Context for threading audit information through operations.
 """
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 import uuid
+
+
+def _get_environment() -> str:
+    """Get current environment from env var."""
+    return os.getenv("ENVIRONMENT", "development")
 
 
 @dataclass
@@ -16,12 +22,14 @@ class RequestContext:
     Attributes:
         request_id: Unique identifier for this request
         job_name: Name of the job being executed
-        triggered_by: Source of the trigger (http, scheduler, cli, mcp)
+        triggered_by: Source of the trigger (http, scheduler, cli, mcp, n8n)
         triggered_at: Timestamp when request was initiated
         dry_run: If True, no mutations should be performed
         debug: If True, enable verbose output
+        environment: Runtime environment (development, staging, production)
         user_id: Optional user ID if available
         correlation_id: Optional ID for correlating related requests
+        parameters: Job parameters used for this execution
     """
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     job_name: str = ""
@@ -29,8 +37,10 @@ class RequestContext:
     triggered_at: datetime = field(default_factory=datetime.utcnow)
     dry_run: bool = False
     debug: bool = False
+    environment: str = field(default_factory=_get_environment)
     user_id: Optional[str] = None
     correlation_id: Optional[str] = None
+    parameters: Optional[dict] = None
 
     def to_audit_dict(self) -> dict:
         """Convert context to dict for audit logging."""
@@ -41,8 +51,10 @@ class RequestContext:
             "triggered_at": self.triggered_at.isoformat(),
             "dry_run": self.dry_run,
             "debug": self.debug,
+            "environment": self.environment,
             "user_id": self.user_id,
             "correlation_id": self.correlation_id,
+            "parameters": self.parameters,
         }
 
     @classmethod

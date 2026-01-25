@@ -71,6 +71,65 @@ if HAS_FUNCTIONS_FRAMEWORK:
             )
 
 
+def _print_kpis(kpis: dict, indent: int = 2) -> None:
+    """
+    Print KPIs with nice formatting, handling nested structures.
+
+    Supports both flat KPIs and structured funnel KPIs.
+    """
+    prefix = " " * indent
+
+    # Check if this is a structured funnel KPI (has discovery, orders, lines keys)
+    if "discovery" in kpis or "orders" in kpis or "lines" in kpis:
+        # Structured funnel format
+        if "discovery" in kpis:
+            d = kpis["discovery"]
+            print(f"\n{prefix}=== DISCOVERY ===")
+            print(f"{prefix}  Lines from query: {d.get('lines_from_query', 0):,}")
+            print(f"{prefix}  Lines with mismatch: {d.get('lines_with_mismatch', 0):,}")
+            print(f"{prefix}  Orders with mismatch: {d.get('orders_with_mismatch', 0):,}")
+            limit = d.get('limit_param')
+            reached = d.get('limit_reached', False)
+            if limit:
+                status = "REACHED" if reached else "not reached"
+                print(f"{prefix}  Limit: {limit} ({status})")
+
+        if "orders" in kpis:
+            o = kpis["orders"]
+            print(f"\n{prefix}=== ORDERS ===")
+            print(f"{prefix}  Processed: {o.get('processed', 0)}")
+            print(f"{prefix}    → Adjusted: {o.get('adjusted', 0)}")
+            print(f"{prefix}    → Skipped (all lines correct): {o.get('skipped_all_lines_correct', 0)}")
+            if o.get('with_errors', 0) > 0:
+                print(f"{prefix}    → With errors: {o.get('with_errors', 0)}")
+
+        if "lines" in kpis:
+            ln = kpis["lines"]
+            print(f"\n{prefix}=== LINES ===")
+            print(f"{prefix}  Processed: {ln.get('processed', 0)}")
+            print(f"{prefix}    → Adjusted: {ln.get('adjusted', 0)}")
+            print(f"{prefix}    → Skipped (already correct): {ln.get('skipped_already_correct', 0)}")
+            if ln.get('skipped_negative_qty', 0) > 0:
+                print(f"{prefix}    → Skipped (negative qty): {ln.get('skipped_negative_qty', 0)}")
+            if ln.get('with_errors', 0) > 0:
+                print(f"{prefix}    → With errors: {ln.get('with_errors', 0)}")
+
+        if "open_moves" in kpis:
+            om = kpis["open_moves"]
+            print(f"\n{prefix}=== CONTEXT ===")
+            print(f"{prefix}  Lines with open moves: {om.get('lines_with_moves', 0)}")
+            print(f"{prefix}  Lines without open moves: {om.get('lines_without_moves', 0)}")
+    else:
+        # Flat KPI format (legacy or simple jobs)
+        for key, value in kpis.items():
+            if isinstance(value, dict):
+                print(f"{prefix}{key}:")
+                for k, v in value.items():
+                    print(f"{prefix}  {k}: {v}")
+            else:
+                print(f"{prefix}{key}: {value}")
+
+
 def cli():
     """
     Command-line interface for local execution.
@@ -231,33 +290,30 @@ Examples:
             job = job_class(ctx)
             result = job.execute(**params)
 
-            print("\nResult:")
-            print("-" * 60)
+            # Format result output
+            print(f"\n{'='*60}")
             print(f"  Status: {result.status.value}")
-            print(f"  Records checked: {result.records_checked}")
-            print(f"  Records updated: {result.records_updated}")
-            print(f"  Records skipped: {result.records_skipped}")
-            print(f"  Errors: {len(result.errors)}")
             if result.duration_seconds:
                 print(f"  Duration: {result.duration_seconds:.2f}s")
 
-            # Print job-specific KPIs
+            # Show job-specific KPIs with nice formatting
             if result.kpis:
-                print("\nKPIs:")
-                for key, value in result.kpis.items():
-                    print(f"  {key}: {value}")
+                _print_kpis(result.kpis)
 
             if result.errors:
-                print("\nErrors:")
+                print(f"\n  Errors ({len(result.errors)}):")
                 for error in result.errors[:5]:
-                    print(f"  - {error}")
+                    print(f"    - {error}")
                 if len(result.errors) > 5:
-                    print(f"  ... and {len(result.errors) - 5} more")
+                    print(f"    ... and {len(result.errors) - 5} more")
 
-            # Output result dict for programmatic use
-            print("\nResult Dict (for BigQuery):")
-            import json
-            print(json.dumps(result.to_dict(), indent=2, default=str))
+            print(f"{'='*60}")
+
+            # Full result dict only in debug mode
+            if debug:
+                import json
+                print("\n[DEBUG] Full result:")
+                print(json.dumps(result.to_kpi_dict(), indent=2, default=str))
 
         except Exception as e:
             logger.exception(f"Job {job_name} failed")

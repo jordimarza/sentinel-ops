@@ -56,7 +56,11 @@ class CleanOldOrdersJob(BaseJob):
         Returns:
             JobResult with execution details
         """
-        result = JobResult.create(self.name, self.dry_run)
+        # Create result with full context for audit trail
+        result = JobResult.from_context(self.ctx, parameters={
+            "days": days,
+            "limit": limit,
+        })
 
         # Initialize operations
         order_ops = OrderOperations(self.odoo, self.ctx, self.log)
@@ -150,87 +154,26 @@ class CleanOldOrdersJob(BaseJob):
         return result
 
 
-# --- Direct execution for testing ---
+# --- Quick Reference (Cheatsheet) ---
+#
+# Run via main.py (recommended):
+#   python main.py run clean_old_orders --dry-run
+#   python main.py run clean_old_orders --dry-run days=60
+#   python main.py run clean_old_orders --dry-run limit=10
+#   python main.py run clean_old_orders days=60 limit=5  # Live!
+#
+# With debug output:
+#   python main.py run clean_old_orders --dry-run --debug
+#
 
 if __name__ == "__main__":
-    """
-    Run this job directly for testing.
-
-    Usage:
-        python -m core.jobs.clean_old_orders --dry-run
-        python -m core.jobs.clean_old_orders --dry-run --days 60
-        python -m core.jobs.clean_old_orders --dry-run --limit 10
-        python -m core.jobs.clean_old_orders --days 60 --limit 5  # Live!
-    """
-    import argparse
     import sys
-    import os
-
-    # Add project root to path
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-    from core.context import RequestContext
-
-    parser = argparse.ArgumentParser(
-        description="Clean Old Orders - Adjust partial order line quantities to delivered amounts",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run in dry-run mode (no mutations)",
-    )
-    parser.add_argument(
-        "--days",
-        type=int,
-        default=30,
-        help="Number of days to look back (default: 30)",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        help="Maximum number of lines to process",
-    )
-
-    args = parser.parse_args()
-
-    # Create context
-    ctx = RequestContext.for_cli(
-        job_name="clean_old_orders",
-        dry_run=args.dry_run,
-    )
-
-    print(f"\n{'='*60}")
-    print(f"Clean Old Orders")
-    print(f"{'='*60}")
-    print(f"  Mode: {'DRY-RUN' if args.dry_run else 'LIVE'}")
-    print(f"  Days: {args.days}")
-    print(f"  Limit: {args.limit or 'none'}")
-    print(f"  Request ID: {ctx.request_id}")
-    print(f"{'='*60}\n")
-
-    if not args.dry_run:
-        confirm = input("WARNING: This is a LIVE run. Type 'yes' to continue: ")
-        if confirm.lower() != "yes":
-            print("Aborted.")
-            sys.exit(0)
-
-    # Run job
-    job = CleanOldOrdersJob(ctx)
-    result = job.execute(days=args.days, limit=args.limit)
-
-    # Print results
-    print(f"\n{'='*60}")
-    print(f"Results")
-    print(f"{'='*60}")
-    print(f"  Status: {result.status.value}")
-    print(f"  Lines checked: {result.kpis.get('lines_checked', 0)}")
-    print(f"  Lines updated: {result.kpis.get('lines_updated', 0)}")
-    print(f"  Errors: {result.kpis.get('exceptions', 0)}")
-    if result.duration_seconds:
-        print(f"  Duration: {result.duration_seconds:.2f}s")
-
-    if result.errors:
-        print(f"\nErrors:")
-        for error in result.errors[:10]:
-            print(f"  - {error}")
-    print()
+    print("\n" + "=" * 60)
+    print("Use main.py to run jobs (avoids import warnings):")
+    print("=" * 60)
+    print("\n  python main.py run clean_old_orders --dry-run")
+    print("  python main.py run clean_old_orders --dry-run days=60")
+    print("  python main.py run clean_old_orders --dry-run limit=10")
+    print("  python main.py run clean_old_orders days=60 limit=5  # Live!")
+    print("\n" + "=" * 60 + "\n")
+    sys.exit(0)

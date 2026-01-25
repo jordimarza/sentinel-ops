@@ -32,8 +32,10 @@ class SentinelLogger:
         self.bq_client = bq_client
         self._logger = logging.getLogger(name)
 
-        # Ensure we have a handler
-        if not self._logger.handlers:
+        # Don't add handler if root logger already has one (from basicConfig in main.py)
+        # This prevents duplicate log messages
+        root_has_handlers = logging.getLogger().handlers
+        if not self._logger.handlers and not root_has_handlers:
             handler = logging.StreamHandler()
             handler.setFormatter(logging.Formatter(
                 '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

@@ -248,6 +248,7 @@ class OdooClient:
         model: str,
         ids: list[int],
         values: dict,
+        context: Optional[dict] = None,
     ) -> bool:
         """
         Update records.
@@ -256,10 +257,13 @@ class OdooClient:
             model: Odoo model name
             ids: List of record IDs to update
             values: Field values to write
+            context: Optional context dict (e.g., {'tracking_disable': True})
 
         Returns:
             True if successful
         """
+        if context:
+            return self.execute(model, "write", ids, values, context=context)
         return self.execute(model, "write", ids, values)
 
     def unlink(self, model: str, ids: list[int]) -> bool:
@@ -417,6 +421,62 @@ class OdooClient:
 
         # Add tag to records (4 = link existing record)
         return self.write(model, record_ids, {tag_field: [(4, tag_id)]})
+
+    def remove_tag(
+        self,
+        model: str,
+        record_ids: list[int],
+        tag_id: int,
+        tag_field: str = "tag_ids",
+    ) -> bool:
+        """
+        Remove a tag from records.
+
+        Args:
+            model: Model of the records
+            record_ids: IDs of records to untag
+            tag_id: ID of the tag to remove
+            tag_field: Field name for tags (default: tag_ids)
+
+        Returns:
+            True if successful
+        """
+        # Remove tag from records (3 = unlink existing record)
+        return self.write(model, record_ids, {tag_field: [(3, tag_id)]})
+
+    def find_tags_by_prefix(
+        self,
+        tag_model: str,
+        prefix: str,
+        record_model: str,
+        record_id: int,
+        tag_field: str = "tag_ids",
+    ) -> list[dict]:
+        """
+        Find tags on a record that start with a given prefix.
+
+        Args:
+            tag_model: Model of tags (e.g., "ah_order_tags")
+            prefix: Prefix to search for (e.g., "AR-HOLD:")
+            record_model: Model of the record (e.g., "sale.order")
+            record_id: ID of the record
+            tag_field: Field name for tags on the record
+
+        Returns:
+            List of tag dicts with id and name
+        """
+        # Read the tag IDs from the record
+        records = self.read(record_model, [record_id], [tag_field])
+        if not records:
+            return []
+
+        tag_ids = records[0].get(tag_field, [])
+        if not tag_ids:
+            return []
+
+        # Read the tags and filter by prefix
+        tags = self.read(tag_model, tag_ids, ["id", "name"])
+        return [t for t in tags if t.get("name", "").startswith(prefix)]
 
     def version(self) -> dict:
         """Get Odoo server version info."""

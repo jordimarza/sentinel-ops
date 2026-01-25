@@ -16,7 +16,53 @@ from core.result import JobResult
 logger = logging.getLogger(__name__)
 
 # Default shipping product IDs for ALOHAS
-DEFAULT_SHIPPING_PRODUCT_IDS = [15743, 23506, 22407, 9216, 23233]
+# All shipping/delivery fee product IDs in ALOHAS Odoo
+# Query: product.product where name ilike 'shipping' or 'delivery' or 'envio'
+DEFAULT_SHIPPING_PRODUCT_IDS = [
+    # Original list
+    15743,  # Shipping Fee
+    23506, 22407, 9216, 23233, 25499,
+    # Shipping Cost variants
+    27642,  # Shipping Cost
+    78499,  # SHIPPING COST
+    81925,  # Shipping cost
+    82539,  # Shipping fee
+    78919,  # Shipping cotst (typo)
+    # Free Shipping
+    1,      # Free delivery charges
+    4065,   # Free Shipping Worldwide - DHL
+    4107,   # Free Shipping Worldwide - UPS
+    4156,   # Free Shipping Worldwide - DHL
+    20455,  # Free Shipping EU - DHL
+    81217,  # Free Shipping - UPS
+    26546,  # Envío gratis
+    # Paid Shipping
+    3996,   # Shipping Worldwide - DHL
+    4048,   # Shipping - UPS
+    4155,   # Shipping Worldwide - UPS
+    4170,   # Shipping EU - DHL
+    21762,  # Shipping Worldwide - UPS
+    25015,  # Shipping Worldwide - UPS
+    86689,  # Shipping Worldwide - DHL
+    # Influencer Shipping
+    4066,   # Influencers Shipping - UPS
+    4198,   # Influencers Shipping Worldwide - DHL
+    21215,  # Influencers Shipping Worldwide - UPS
+    45139,  # Influencers Shipping - UPS
+    50100,  # Influencers Shipping EU - DHL
+    # Shopify Shipping Products
+    26976,  # Shopify Shipping Product
+    81327, 81328, 81329, 81330, 81331,  # Shopify Shipping Product 1,4,5,6,7
+    82660,  # Shopify Shipping Product 10
+    86294,  # Shopify Shipping Product 11
+    87361,  # Shopify Shipping Product 13
+    # Other carriers
+    39118,  # FedEx delivery
+    51389,  # GLS Delivery
+    # Carrier products (shippypro, etc.)
+    27644,  # shippypro carrier
+    86327,  # carrier shipping cost
+]
 
 
 @register_job(
@@ -46,7 +92,7 @@ class CompleteShippingOnlyOrdersJob(BaseJob):
         shipping_product_ids: Optional[list[int]] = None,
         limit: Optional[int] = None,
         order_ids: Optional[list[int]] = None,
-        **params
+        **_params
     ) -> JobResult:
         """
         Execute the complete shipping only orders job.
@@ -60,7 +106,12 @@ class CompleteShippingOnlyOrdersJob(BaseJob):
         Returns:
             JobResult with execution details
         """
-        result = JobResult.create(self.name, self.dry_run)
+        # Create result with full context for audit trail
+        result = JobResult.from_context(self.ctx, parameters={
+            "shipping_product_ids": shipping_product_ids,
+            "limit": limit,
+            "order_ids": order_ids,
+        })
 
         # Use default shipping product IDs if not provided
         if shipping_product_ids is None:
@@ -116,7 +167,7 @@ class CompleteShippingOnlyOrdersJob(BaseJob):
             try:
                 # Complete each pending shipping line
                 for line in pending_lines:
-                    op_result = order_ops.complete_shipping_line(line)
+                    op_result = order_ops.complete_shipping_line(line, order_name=order_name)
                     result.add_operation(op_result)
 
                     if op_result.success:
@@ -176,106 +227,14 @@ class CompleteShippingOnlyOrdersJob(BaseJob):
             "exceptions": len(result.errors),
         }
 
-
-# --- Direct execution for testing ---
-
 if __name__ == "__main__":
-    """
-    Run this job directly for testing.
-
-    Usage:
-        python -m core.jobs.complete_shipping_only_orders --dry-run
-        python -m core.jobs.complete_shipping_only_orders --dry-run --order-ids 455346
-        python -m core.jobs.complete_shipping_only_orders --dry-run --limit 10
-        python -m core.jobs.complete_shipping_only_orders --order-ids 455346  # Live!
-    """
-    import argparse
     import sys
-    import os
-
-    # Add project root to path
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-    from core.context import RequestContext
-
-    parser = argparse.ArgumentParser(
-        description="Complete Shipping Only Orders - Auto-complete shipping lines where only shipping is pending",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run in dry-run mode (no mutations)",
-    )
-    parser.add_argument(
-        "--order-ids",
-        type=str,
-        help="Comma-separated order IDs to process (e.g., 455346,455347)",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        help="Maximum number of orders to process",
-    )
-    parser.add_argument(
-        "--shipping-products",
-        type=str,
-        help="Comma-separated shipping product IDs (overrides defaults)",
-    )
-
-    args = parser.parse_args()
-
-    # Parse list arguments
-    order_ids = None
-    if args.order_ids:
-        order_ids = [int(x.strip()) for x in args.order_ids.split(",")]
-
-    shipping_product_ids = None
-    if args.shipping_products:
-        shipping_product_ids = [int(x.strip()) for x in args.shipping_products.split(",")]
-
-    # Create context
-    ctx = RequestContext.for_cli(
-        job_name="complete_shipping_only_orders",
-        dry_run=args.dry_run,
-    )
-
-    print(f"\n{'='*60}")
-    print(f"Complete Shipping Only Orders")
-    print(f"{'='*60}")
-    print(f"  Mode: {'DRY-RUN' if args.dry_run else 'LIVE'}")
-    print(f"  Order IDs: {order_ids or 'all qualifying'}")
-    print(f"  Limit: {args.limit or 'none'}")
-    print(f"  Request ID: {ctx.request_id}")
-    print(f"{'='*60}\n")
-
-    if not args.dry_run:
-        confirm = input("WARNING: This is a LIVE run. Type 'yes' to continue: ")
-        if confirm.lower() != "yes":
-            print("Aborted.")
-            sys.exit(0)
-
-    # Run job
-    job = CompleteShippingOnlyOrdersJob(ctx)
-    result = job.execute(
-        order_ids=order_ids,
-        limit=args.limit,
-        shipping_product_ids=shipping_product_ids,
-    )
-
-    # Print results
-    print(f"\n{'='*60}")
-    print(f"Results")
-    print(f"{'='*60}")
-    print(f"  Status: {result.status.value}")
-    print(f"  Orders checked: {result.kpis.get('orders_checked', 0)}")
-    print(f"  Orders completed: {result.kpis.get('orders_completed', 0)}")
-    print(f"  Lines completed: {result.kpis.get('lines_completed', 0)}")
-    print(f"  Errors: {result.kpis.get('exceptions', 0)}")
-    if result.duration_seconds:
-        print(f"  Duration: {result.duration_seconds:.2f}s")
-
-    if result.errors:
-        print(f"\nErrors:")
-        for error in result.errors[:10]:
-            print(f"  - {error}")
-    print()
+    print("\n" + "=" * 60)
+    print("Use main.py to run jobs (avoids import warnings):")
+    print("=" * 60)
+    print("\n  python main.py run complete_shipping_only_orders --dry-run")
+    print("  python main.py run complete_shipping_only_orders --dry-run order_ids=455346")
+    print("  python main.py run complete_shipping_only_orders --dry-run limit=10")
+    print("  python main.py run complete_shipping_only_orders order_ids=455346  # Live!")
+    print("\n" + "=" * 60 + "\n")
+    sys.exit(0)
