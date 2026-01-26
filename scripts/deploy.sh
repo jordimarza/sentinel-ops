@@ -16,7 +16,7 @@ FUNCTION_NAME="sentinel"
 SERVICE_ACCOUNT="sentinel-ops@${PROJECT_ID}.iam.gserviceaccount.com"
 RUNTIME="python312"
 MEMORY="512MB"
-TIMEOUT="540s"
+TIMEOUT="1200s"
 
 # Colors
 GREEN='\033[0;32m'
