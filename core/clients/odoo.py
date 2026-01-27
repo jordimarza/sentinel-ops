@@ -121,16 +121,33 @@ class OdooClient:
         Returns:
             Method result
         """
-        models = self._get_models()
-        return models.execute_kw(
-            self.db,
-            self.uid,
-            self.password,
-            model,
-            method,
-            args,
-            kwargs or {},
-        )
+        try:
+            models = self._get_models()
+            return models.execute_kw(
+                self.db,
+                self.uid,
+                self.password,
+                model,
+                method,
+                args,
+                kwargs or {},
+            )
+        except Exception as e:
+            if "Idle" in str(e):
+                logger.warning("Odoo connection idle, re-authenticating...")
+                self._uid = None
+                self._models = None
+                models = self._get_models()
+                return models.execute_kw(
+                    self.db,
+                    self.uid,
+                    self.password,
+                    model,
+                    method,
+                    args,
+                    kwargs or {},
+                )
+            raise
 
     def search(
         self,

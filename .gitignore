@@ -5,3 +5,4 @@ __pycache__/
 .env.local
 .tool-versions
 data/logs/*
+api.http
