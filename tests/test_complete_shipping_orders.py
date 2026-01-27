@@ -146,12 +146,12 @@ class TestOrderOperationsFindShippingOnly:
         sample_order_with_shipping_only,
     ):
         """Test finding orders where only shipping is pending."""
-        # Return pending shipping line
-        mock_odoo.search_read.return_value = sample_order_with_shipping_only[
-            "pending_shipping_lines"
+        # First search_read returns pending shipping lines
+        # Second search_read returns non-shipping lines (empty or all completed)
+        mock_odoo.search_read.side_effect = [
+            sample_order_with_shipping_only["pending_shipping_lines"],  # shipping lines
+            [],  # non-shipping lines (none, so no pending)
         ]
-        # No pending non-shipping lines
-        mock_odoo.search_count.return_value = 0
         # Return order details
         mock_odoo.read.return_value = [
             {"id": 455346, "name": "S00455346"}
@@ -176,12 +176,12 @@ class TestOrderOperationsFindShippingOnly:
         sample_order_with_shipping_only,
     ):
         """Test that orders with non-shipping pending are excluded."""
-        # Return pending shipping line
-        mock_odoo.search_read.return_value = sample_order_with_shipping_only[
-            "pending_shipping_lines"
+        # First search_read returns pending shipping lines
+        # Second search_read returns non-shipping line with pending qty
+        mock_odoo.search_read.side_effect = [
+            sample_order_with_shipping_only["pending_shipping_lines"],  # shipping lines
+            [{"id": 999, "product_uom_qty": 2.0, "qty_delivered": 1.0}],  # pending non-shipping
         ]
-        # Has pending non-shipping lines - should be excluded
-        mock_odoo.search_count.return_value = 1
 
         ops = OrderOperations(mock_odoo, test_context, mock_logger)
         result = ops.find_orders_with_only_shipping_pending(
@@ -239,11 +239,17 @@ class TestOrderOperationsCompleteShippingLine:
         line = {"id": 1002, "product_uom_qty": 1.0, "qty_delivered": 0.0}
         result = ops.complete_shipping_line(line)
 
-        # Should write in live mode
+        # Should write in live mode with tracking disabled
         mock_odoo.write.assert_called_once_with(
             "sale.order.line",
             [1002],
             {"qty_delivered": 1.0},
+            context={
+                "tracking_disable": True,
+                "mail_notrack": True,
+                "mail_create_nolog": True,
+                "mail_auto_subscribe_no_notify": True,
+            },
         )
         assert result.success
 
@@ -329,10 +335,14 @@ class TestCompleteShippingOnlyOrdersJob:
         sample_order_with_shipping_only,
     ):
         """Test job execution with qualifying orders in dry-run mode."""
-        # Setup mocks
+        # Setup mocks - search_read is called twice:
+        # 1. Find shipping lines
+        # 2. Find non-shipping lines for the order
         pending_shipping = sample_order_with_shipping_only["pending_shipping_lines"]
-        mock_odoo.search_read.return_value = pending_shipping
-        mock_odoo.search_count.return_value = 0  # No non-shipping pending
+        mock_odoo.search_read.side_effect = [
+            pending_shipping,  # shipping lines
+            [],  # non-shipping lines (empty = all completed)
+        ]
         mock_odoo.read.return_value = [{"id": 455346, "name": "S00455346"}]
 
         job = CompleteShippingOnlyOrdersJob(
@@ -361,10 +371,14 @@ class TestCompleteShippingOnlyOrdersJob:
         sample_order_with_shipping_only,
     ):
         """Test job execution in live mode."""
-        # Setup mocks
+        # Setup mocks - search_read is called twice:
+        # 1. Find shipping lines
+        # 2. Find non-shipping lines for the order
         pending_shipping = sample_order_with_shipping_only["pending_shipping_lines"]
-        mock_odoo.search_read.return_value = pending_shipping
-        mock_odoo.search_count.return_value = 0
+        mock_odoo.search_read.side_effect = [
+            pending_shipping,  # shipping lines
+            [],  # non-shipping lines (empty = all completed)
+        ]
         mock_odoo.read.return_value = [{"id": 455346, "name": "S00455346"}]
 
         job = CompleteShippingOnlyOrdersJob(
@@ -484,10 +498,14 @@ class TestCompleteShippingOnlyOrdersJob:
         sample_order_with_shipping_only,
     ):
         """Test job handles errors during shipping line completion."""
-        # Setup mocks
+        # Setup mocks - search_read is called twice:
+        # 1. Find shipping lines
+        # 2. Find non-shipping lines for the order
         pending_shipping = sample_order_with_shipping_only["pending_shipping_lines"]
-        mock_odoo.search_read.return_value = pending_shipping
-        mock_odoo.search_count.return_value = 0
+        mock_odoo.search_read.side_effect = [
+            pending_shipping,  # shipping lines
+            [],  # non-shipping lines (empty = all completed)
+        ]
         mock_odoo.read.return_value = [{"id": 455346, "name": "S00455346"}]
         # Make write fail
         mock_odoo.write.side_effect = Exception("Write failed")
@@ -502,9 +520,10 @@ class TestCompleteShippingOnlyOrdersJob:
 
         result = job.run()
 
-        # Should handle error gracefully
-        assert len(result.errors) > 0
-        assert result.kpis["exceptions"] > 0
+        # Should handle error gracefully - errors go into operation results
+        assert len(result.operations) > 0
+        assert not result.operations[0].success
+        assert result.operations[0].error is not None
 
     def test_job_handles_search_error(
         self, mock_odoo, mock_bq, mock_alerter, mock_logger, test_context

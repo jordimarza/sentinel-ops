@@ -59,11 +59,17 @@ class TestOrderOperations:
         line = {"id": 1, "qty_delivered": 5.0}
         result = ops.adjust_line_qty_to_delivered(line)
 
-        # Should write in live mode
+        # Should write in live mode with tracking disabled
         mock_odoo.write.assert_called_once_with(
             "sale.order.line",
             [1],
             {"product_uom_qty": 5.0},
+            context={
+                "tracking_disable": True,
+                "mail_notrack": True,
+                "mail_create_nolog": True,
+                "mail_auto_subscribe_no_notify": True,
+            },
         )
         assert result.success
 

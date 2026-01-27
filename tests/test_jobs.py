@@ -200,18 +200,19 @@ class TestJobResult:
 
         # Add successful operation
         result.add_operation(OperationResult.ok(1, "model", "action"))
-        assert result.records_checked == 1
+        # Note: records_checked is managed by jobs, not add_operation
         assert result.records_updated == 1
 
         # Add skipped operation
         result.add_operation(OperationResult.skipped(2, "model", "reason"))
-        assert result.records_checked == 2
         assert result.records_skipped == 1
 
         # Add failed operation
         result.add_operation(OperationResult.fail(3, "model", "action", "error"))
-        assert result.records_checked == 3
         assert len(result.errors) == 1
+
+        # Verify operations are tracked
+        assert len(result.operations) == 3
 
     def test_complete_sets_status(self):
         """Test that complete() sets appropriate status."""
@@ -241,3 +242,45 @@ class TestJobResult:
         result.records_checked = 10
         result.complete()
         assert result.status == ResultStatus.DRY_RUN
+
+    def test_to_kpi_dict_with_records(self):
+        """Test that to_kpi_dict includes detailed record information."""
+        from core.result import OperationResult
+
+        result = JobResult.create("test_job")
+
+        # Add operations with record names
+        result.add_operation(OperationResult.ok(
+            record_id=123,
+            model="sale.order.line",
+            action="complete_shipping_line",
+            record_name="S00455346/Shipping Fee",
+        ))
+        result.add_operation(OperationResult.ok(
+            record_id=456,
+            model="sale.order",
+            action="message_post",
+            record_name="S00455346",
+        ))
+
+        result.complete()
+
+        # Get KPI dict with Odoo URL
+        kpi_dict = result.to_kpi_dict(odoo_url="https://odoo.alohas.com")
+
+        # Check that modified_records is included
+        assert "modified_records" in kpi_dict
+        assert len(kpi_dict["modified_records"]) == 2
+
+        # Check first record has correct fields
+        record = kpi_dict["modified_records"][0]
+        assert record["record_id"] == 123
+        assert record["record_name"] == "S00455346/Shipping Fee"
+        assert record["model"] == "sale.order.line"
+        assert record["action"] == "complete_shipping_line"
+        assert record["odoo_url"] == "https://odoo.alohas.com/web#id=123&model=sale.order.line&view_type=form"
+
+        # Check action_summary
+        assert "action_summary" in kpi_dict
+        assert "complete_shipping_line_sale.order.line" in kpi_dict["action_summary"]
+        assert kpi_dict["action_summary"]["complete_shipping_line_sale.order.line"]["count"] == 1

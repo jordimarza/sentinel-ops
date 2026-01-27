@@ -64,4 +64,71 @@ def __getattr__(name):
 
 ---
 
-**Last updated**: 2025-01-22
+## BigQuery: Adding New Tables
+
+**Issue**: `scripts/recreate_bq_tables.py` drops ALL tables when run, losing existing data.
+
+**Mistake made**: Ran full script to add `intervention_tasks` table, which unnecessarily deleted data in `audit_log`, `job_kpis`, `execution_plans`, `execution_feedback`.
+
+**Correct approach for adding a single table**:
+
+```python
+# Option 1: Use the ensure method directly
+from core.clients.bigquery import get_bigquery_client
+bq = get_bigquery_client()
+bq._ensure_tasks_table()  # Only creates if doesn't exist
+
+# Option 2: Create table via BQ client
+from google.cloud import bigquery
+client = bigquery.Client()
+# ... define schema and create single table
+```
+
+**Rule**: When adding new tables, never use the full recreate script unless you intend to wipe all data. Use targeted table creation instead.
+
+---
+
+## Odoo: Changing Sale Line Qty Creates Moves
+
+**Issue**: When you change `product_uom_qty` on a sale.order.line, Odoo automatically creates stock.move records to fulfill the new demand.
+
+**Problem encountered**: Job had logic `target_qty = delivered + open_moves`, which:
+1. Increased line qty (e.g., 1 → 4)
+2. Odoo created new moves for the difference
+3. Next run: open_moves now higher → target increases
+4. Feedback loop → qty kept growing (reached 20.0)
+
+**Root cause**: Open moves on **closed orders** are orphaned/stale. They shouldn't be counted.
+
+**Fix**: For closed orders, `target_qty = delivered_qty` (ignore open moves)
+
+**Related picking issue**: The orphaned OUT picking (e.g., RMTS/OUT/01778) needs manual cancellation if `tec_date_export` is NULL.
+
+**Prevention checklist for jobs that modify sale order lines:**
+- [ ] Consider if Odoo will auto-create moves
+- [ ] For closed orders, only match delivered qty
+- [ ] If open moves matter (active orders), verify they're legitimate
+- [ ] Test with dry-run AND verify with a second run
+
+---
+
+## Odoo: Picking Export Lock Field
+
+**Field**: `tec_date_export` on stock.picking
+
+**Meaning**:
+- `NULL` → Not exported to warehouse, safe to modify/cancel
+- Set → Already sent to warehouse, DO NOT TOUCH
+
+**Use in jobs**: Always check this field before modifying/cancelling pickings.
+
+```python
+if picking.get("tec_date_export"):
+    # Already exported - skip
+    continue
+# Safe to modify
+```
+
+---
+
+**Last updated**: 2025-01-24

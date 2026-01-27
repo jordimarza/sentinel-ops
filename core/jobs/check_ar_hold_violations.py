@@ -367,22 +367,48 @@ class CheckArHoldViolationsJob(BaseJob):
 
 if __name__ == "__main__":
     import sys
+
     print("\n" + "=" * 70)
     print("Check AR-HOLD Violations Job")
     print("=" * 70)
-    print("\nUsage:")
+    print(r"""
+Usage (CLI):
+----------------------------------------------------------------------
+# BQ auto-discovery (no IDs needed)
+python main.py run check_ar_hold_violations --dry-run
+
+# With limit
+python main.py run check_ar_hold_violations --dry-run --limit 5
+
+# Specific order IDs
+python main.py run check_ar_hold_violations --dry-run order_ids=745296
+
+# With custom extension days (default: 15)
+python main.py run check_ar_hold_violations --dry-run order_ids=745296 extension_days=30
+
+# Skip partner block check (for testing)
+python main.py run check_ar_hold_violations --dry-run order_ids=745296 skip_partner_check=True
+
+# Live execution
+python main.py run check_ar_hold_violations order_ids=745296
+
+Usage (curl):
+----------------------------------------------------------------------
+# NOTE: Add -H "X-API-Key: $SENTINEL_API_KEY" for remote calls
+
+# BQ auto-discovery with limit
+curl -X POST https://sentinel-ops-659945993606.europe-west1.run.app/execute \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: $SENTINEL_API_KEY" \
+    -d '{"job": "check_ar_hold_violations", "dry_run": true, "params": {"limit": 5}}'
+
+# Specific order IDs
+curl -X POST https://sentinel-ops-659945993606.europe-west1.run.app/execute \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: $SENTINEL_API_KEY" \
+    -d '{"job": "check_ar_hold_violations", "dry_run": true, "params": {"order_ids": [745296]}}'
+""")
     print("-" * 70)
-    print("\n# Dry run with order IDs from BQ query")
-    print("python main.py run check_ar_hold_violations --dry-run order_ids=123,456,789")
-    print("\n# With custom extension days (default: 15)")
-    print("python main.py run check_ar_hold_violations --dry-run order_ids=123 extension_days=30")
-    print("\n# Skip partner block check (for testing)")
-    print("python main.py run check_ar_hold_violations --dry-run order_ids=123 skip_partner_check=True")
-    print("\n# With limit")
-    print("python main.py run check_ar_hold_violations --dry-run order_ids=123,456,789 limit=5")
-    print("\n# Live execution")
-    print("python main.py run check_ar_hold_violations order_ids=123,456")
-    print("\n" + "-" * 70)
     print("\nBQ Query to find candidates:")
     print("-" * 70)
     print("""
