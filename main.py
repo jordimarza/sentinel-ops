@@ -141,43 +141,11 @@ def cli():
     """
     import argparse
 
+    base_url = "https://sentinel-ops-659945993606.europe-west1.run.app"
+
     parser = argparse.ArgumentParser(
         description="Sentinel-Ops - ERP Operations Framework",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples (CLI):
-    python main.py list
-    python main.py run clean_old_orders --dry-run
-    python main.py run check_ar_hold_violations --dry-run --limit 5
-    python main.py run date_compliance_all --dry-run --limit 3
-
-Examples (HTTP / Cloud Function):
-    # Health check
-    curl http://localhost:8080/health
-
-    # List jobs
-    curl http://localhost:8080/jobs
-
-    # Run a job (dry-run, BQ discovery)
-    curl -X POST http://localhost:8080/execute \\
-      -H "Content-Type: application/json" \\
-      -d '{"job": "check_ar_hold_violations", "dry_run": true}'
-
-    # Run with limit
-    curl -X POST http://localhost:8080/execute \\
-      -H "Content-Type: application/json" \\
-      -d '{"job": "check_ar_hold_violations", "dry_run": true, "params": {"limit": 5}}'
-
-    # Run with specific IDs
-    curl -X POST http://localhost:8080/execute \\
-      -H "Content-Type: application/json" \\
-      -d '{"job": "check_ar_hold_violations", "dry_run": true, "params": {"order_ids": [745296]}}'
-
-    # Run all date compliance (BQ discovery)
-    curl -X POST http://localhost:8080/execute \\
-      -H "Content-Type: application/json" \\
-      -d '{"job": "date_compliance_all", "dry_run": true, "params": {"limit": 3}}'
-        """,
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
@@ -186,7 +154,71 @@ Examples (HTTP / Cloud Function):
     list_parser = subparsers.add_parser("list", help="List available jobs")
 
     # Run command
-    run_parser = subparsers.add_parser("run", help="Run a job")
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run a job",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+Per-Job Examples (CLI + curl):
+
+  check_ar_hold_violations (BQ auto-discovery):
+    python main.py run check_ar_hold_violations --dry-run
+    python main.py run check_ar_hold_violations --dry-run --limit 5
+    python main.py run check_ar_hold_violations --dry-run order_ids=745296
+    curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
+      -d '{{"job":"check_ar_hold_violations","dry_run":true,"params":{{"limit":5}}}}'
+
+  sync_so_picking_dates (BQ auto-discovery):
+    python main.py run sync_so_picking_dates --dry-run
+    python main.py run sync_so_picking_dates --dry-run order_ids=745296
+    python main.py run sync_so_picking_dates --dry-run picking_ids=860531
+    curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
+      -d '{{"job":"sync_so_picking_dates","dry_run":true,"params":{{"limit":10}}}}'
+
+  sync_po_picking_dates (BQ auto-discovery):
+    python main.py run sync_po_picking_dates --dry-run
+    python main.py run sync_po_picking_dates --dry-run po_ids=100,101
+    python main.py run sync_po_picking_dates --dry-run sync_line_level=True
+    curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
+      -d '{{"job":"sync_po_picking_dates","dry_run":true,"params":{{"limit":10}}}}'
+
+  date_compliance_all (orchestrates all 3 above):
+    python main.py run date_compliance_all --dry-run
+    python main.py run date_compliance_all --dry-run --limit 3
+    python main.py run date_compliance_all --dry-run skip_po_sync=True
+    curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
+      -d '{{"job":"date_compliance_all","dry_run":true,"params":{{"limit":3}}}}'
+
+  clean_old_orders:
+    python main.py run clean_old_orders --dry-run
+    python main.py run clean_old_orders --dry-run days=60 --limit 100
+    curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
+      -d '{{"job":"clean_old_orders","dry_run":true,"params":{{"days":60,"limit":100}}}}'
+
+  adjust_closed_order_quantities:
+    python main.py run adjust_closed_order_quantities --dry-run
+    python main.py run adjust_closed_order_quantities --dry-run order_ids=745296
+    curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
+      -d '{{"job":"adjust_closed_order_quantities","dry_run":true,"params":{{"limit":10}}}}'
+
+  complete_shipping_only_orders:
+    python main.py run complete_shipping_only_orders --dry-run
+    python main.py run complete_shipping_only_orders --dry-run order_ids=745296
+    curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
+      -d '{{"job":"complete_shipping_only_orders","dry_run":true,"params":{{"limit":10}}}}'
+
+  clean_empty_draft_transfers (BQ auto-discovery):
+    python main.py run clean_empty_draft_transfers --dry-run
+    python main.py run clean_empty_draft_transfers --dry-run picking_ids=12345
+    curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
+      -d '{{"job":"clean_empty_draft_transfers","dry_run":true,"params":{{"limit":10}}}}'
+
+General:
+    python main.py list                              # List all jobs
+    curl {base_url}/health                           # Health check
+    curl {base_url}/jobs                             # List jobs (HTTP)
+        """,
+    )
     run_parser.add_argument("job", help="Job name to run")
     run_parser.add_argument(
         "--dry-run",
