@@ -105,6 +105,10 @@ class CheckArHoldViolationsJob(BaseJob):
         # Initialize data for passing to next job
         result.data["processed_order_ids"] = []
 
+        # Normalize order_ids to list (CLI may pass single int)
+        if order_ids is not None and not isinstance(order_ids, list):
+            order_ids = [order_ids]
+
         # Discover from BQ if no explicit order_ids
         if not order_ids:
             self.log.info("No order_ids provided - discovering from BigQuery")
@@ -169,48 +173,80 @@ class CheckArHoldViolationsJob(BaseJob):
                         skip_reasons["no_block_tag"] = skip_reasons.get("no_block_tag", 0) + 1
                         continue
 
-                # Parse current commitment_date
-                commitment_date_str = order.get("commitment_date")
-                if not commitment_date_str:
+                # Parse cancel_date (required for N calculation)
+                cancel_date_str = order.get("ah_cancel_date")
+                if not cancel_date_str:
                     self.log.warning(
-                        f"Order {order_name} has no commitment_date - skipping"
+                        f"Order {order_name} has no ah_cancel_date - skipping"
                     )
                     result.records_skipped += 1
-                    skip_reasons["no_commitment_date"] = skip_reasons.get("no_commitment_date", 0) + 1
+                    skip_reasons["no_cancel_date"] = skip_reasons.get("no_cancel_date", 0) + 1
                     continue
 
-                if isinstance(commitment_date_str, str):
-                    current_commitment = datetime.strptime(
-                        commitment_date_str, "%Y-%m-%d %H:%M:%S"
-                    )
+                if isinstance(cancel_date_str, str):
+                    try:
+                        cancel_date = datetime.strptime(cancel_date_str, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        cancel_date = datetime.strptime(cancel_date_str, "%Y-%m-%d")
                 else:
-                    current_commitment = commitment_date_str
+                    cancel_date = cancel_date_str
 
-                # Get current AR-HOLD count
+                # Parse current commitment_date (for logging)
+                commitment_date_str = order.get("commitment_date")
+                if commitment_date_str:
+                    if isinstance(commitment_date_str, str):
+                        current_commitment = datetime.strptime(
+                            commitment_date_str, "%Y-%m-%d %H:%M:%S"
+                        )
+                    else:
+                        current_commitment = commitment_date_str
+                else:
+                    current_commitment = cancel_date  # fallback
+
+                # Calculate new commitment_date = cancel_date + (15 * N)
+                # where N is the smallest integer that puts the date in the future
+                new_commitment, hold_n = date_ops.calculate_next_commitment_date(
+                    cancel_date=cancel_date,
+                    interval_days=extension_days,
+                )
+
+                # Odoo safeguard: if commitment_date is already at or past
+                # the calculated target, nothing to do (previous run handled it)
+                if current_commitment >= new_commitment:
+                    self.log.skip(
+                        order_id,
+                        f"Commitment date already at {current_commitment:%Y-%m-%d} "
+                        f"(target: {new_commitment:%Y-%m-%d}) - skipping {order_name}",
+                    )
+                    result.records_skipped += 1
+                    skip_reasons["already_extended"] = skip_reasons.get("already_extended", 0) + 1
+                    continue
+
+                # Get current AR-HOLD count for logging
                 existing_tag = date_ops.find_ar_hold_tag_on_order(order_id)
                 old_hold_count = existing_tag[1] if existing_tag else 0
 
-                # Step 1: Extend commitment_date
-                extend_result, new_commitment = date_ops.extend_commitment_date(
+                # Step 1: Set commitment_date = cancel_date + (15 * N)
+                extend_result, new_commitment = date_ops.set_commitment_date(
                     order_id=order_id,
                     order_name=order_name,
-                    current_commitment_date=current_commitment,
-                    days=extension_days,
+                    new_date=new_commitment,
                 )
                 result.add_operation(extend_result)
 
                 if not extend_result.success or not new_commitment:
                     self.log.error(
-                        f"Failed to extend commitment_date for {order_name}",
+                        f"Failed to set commitment_date for {order_name}",
                         record_id=order_id,
                     )
-                    result.errors.append(f"Order {order_name}: Failed to extend date")
+                    result.errors.append(f"Order {order_name}: Failed to set date")
                     continue
 
-                # Step 2: Increment AR-HOLD tag
-                tag_result, new_hold_count = date_ops.increment_ar_hold_tag(
+                # Step 2: Set AR-HOLD:N tag (matches the N used for date)
+                tag_result, new_hold_count = date_ops.set_ar_hold_tag(
                     order_id=order_id,
                     order_name=order_name,
+                    target_n=hold_n,
                 )
                 result.add_operation(tag_result)
 
@@ -299,7 +335,7 @@ class CheckArHoldViolationsJob(BaseJob):
 
         try:
             rows = self.bq.query(query)
-            order_ids = [row.get("order_id") for row in rows if row.get("order_id")]
+            order_ids = list({row.get("order_id") for row in rows if row.get("order_id")})
             self.log.info(f"Found {len(order_ids)} AR-HOLD violation candidates from BQ")
             return order_ids, None
         except Exception as e:

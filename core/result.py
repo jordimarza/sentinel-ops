@@ -201,6 +201,7 @@ class JobResult:
     errors: list[str] = field(default_factory=list)
     operations: list[OperationResult] = field(default_factory=list)
     result_data: Optional[dict] = None  # Query results, metrics, validation details
+    data: dict[str, Any] = field(default_factory=dict)  # Arbitrary data for passing between jobs
     kpis: dict[str, Any] = field(default_factory=dict)
     dry_run: bool = False
     # Context info for audit trail

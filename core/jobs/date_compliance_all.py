@@ -82,8 +82,8 @@ class DateComplianceAllJob(BaseJob):
         # Track IDs to pass between jobs
         ar_hold_order_ids: list[int] = []
 
-        # Job 1: AR-HOLD violations
-        if not skip_ar_hold and order_ids:
+        # Job 1: AR-HOLD violations (discovers from BQ if no order_ids)
+        if not skip_ar_hold:
             self.log.info("Running Job 1: check_ar_hold_violations")
 
             try:
@@ -109,7 +109,7 @@ class DateComplianceAllJob(BaseJob):
             except Exception as e:
                 self.log.error("Job 1 failed", error=str(e))
                 result.errors.append(f"Job 1 (check_ar_hold_violations): {e}")
-        elif skip_ar_hold:
+        else:
             self.log.info("Skipping Job 1: check_ar_hold_violations")
 
         # Job 2: SO picking date sync
@@ -142,15 +142,15 @@ class DateComplianceAllJob(BaseJob):
         else:
             self.log.info("Skipping Job 2: sync_so_picking_dates")
 
-        # Job 3: PO picking date sync
-        if not skip_po_sync and po_ids:
+        # Job 3: PO picking date sync (discovers from BQ if no po_ids)
+        if not skip_po_sync:
             self.log.info("Running Job 3: sync_po_picking_dates")
 
             try:
                 job3_class = get_job("sync_po_picking_dates")
                 job3 = job3_class(self.ctx)
                 r3 = job3.execute(
-                    po_ids=po_ids,
+                    po_ids=po_ids or None,
                     limit=limit,
                     sync_line_level=sync_line_level,
                 )
@@ -165,7 +165,7 @@ class DateComplianceAllJob(BaseJob):
             except Exception as e:
                 self.log.error("Job 3 failed", error=str(e))
                 result.errors.append(f"Job 3 (sync_po_picking_dates): {e}")
-        elif skip_po_sync:
+        else:
             self.log.info("Skipping Job 3: sync_po_picking_dates")
 
         # Set combined KPIs

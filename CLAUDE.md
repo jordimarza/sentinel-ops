@@ -256,8 +256,12 @@ Ensure you're in the `sentinel-ops` directory or add to PYTHONPATH:
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 ```
 
+## Session Startup
+
+On session start, read `.claude/memory/topics/future.md` to load pending tasks and planned work.
+
 ---
 
-**Last Updated**: 2025-01-22
+**Last Updated**: 2025-01-27
 **Architecture**: Jobs + Operations pattern with Cloud Function adapter
 **Agent**: See `.claude/AGENT.md` for full agent context

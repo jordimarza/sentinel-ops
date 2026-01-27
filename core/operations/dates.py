@@ -72,18 +72,20 @@ class DateComplianceOperations(BaseOperation):
 
         return None
 
-    def increment_ar_hold_tag(
+    def set_ar_hold_tag(
         self,
         order_id: int,
         order_name: str,
+        target_n: int,
     ) -> tuple[OperationResult, int]:
         """
-        Increment AR-HOLD tag: find AR-HOLD:N, remove it, add AR-HOLD:N+1.
-        If no existing tag, adds AR-HOLD:1.
+        Set AR-HOLD tag to a specific N value.
+        Removes existing AR-HOLD:X tag if present, then adds AR-HOLD:N.
 
         Args:
             order_id: Sale order ID
             order_name: Sale order name for logging
+            target_n: The N value to set (e.g., 27 for AR-HOLD:27)
 
         Returns:
             Tuple of (OperationResult, new_hold_count)
@@ -92,7 +94,16 @@ class DateComplianceOperations(BaseOperation):
 
         if existing:
             tag_id, current_n, tag_name = existing
-            new_n = current_n + 1
+
+            if current_n == target_n:
+                # Already correct
+                return (OperationResult.ok(
+                    record_id=order_id,
+                    model=self.SO_MODEL,
+                    action="ar_hold_tag_unchanged",
+                    message=f"AR-HOLD:{target_n} already set",
+                    record_name=order_name,
+                ), target_n)
 
             # Remove old tag
             remove_result = self._safe_remove_tag(
@@ -105,11 +116,9 @@ class DateComplianceOperations(BaseOperation):
             )
             if not remove_result.success:
                 return (remove_result, current_n)
-        else:
-            new_n = 1
 
         # Add new tag
-        new_tag_name = f"{self.AR_HOLD_TAG_PREFIX}{new_n}"
+        new_tag_name = f"{self.AR_HOLD_TAG_PREFIX}{target_n}"
         add_result = self._safe_add_tag(
             model=self.SO_MODEL,
             record_ids=[order_id],
@@ -119,29 +128,52 @@ class DateComplianceOperations(BaseOperation):
             record_name=order_name,
         )
 
-        return (add_result, new_n)
+        return (add_result, target_n)
 
-    def extend_commitment_date(
+    def calculate_next_commitment_date(
+        self,
+        cancel_date: datetime,
+        interval_days: int = DEFAULT_HOLD_EXTENSION_DAYS,
+    ) -> tuple[datetime, int]:
+        """
+        Calculate the next commitment_date as cancel_date + (interval * N),
+        where N is the smallest integer that puts the date in the future.
+
+        Args:
+            cancel_date: The order's ah_cancel_date
+            interval_days: Extension interval in days (default: 15)
+
+        Returns:
+            Tuple of (new_commitment_date, N)
+        """
+        import math
+        now = datetime.now()
+        days_past = (now - cancel_date).total_seconds() / 86400
+        n = max(1, math.ceil(days_past / interval_days))
+        new_date = cancel_date + timedelta(days=interval_days * n)
+        # Edge case: if exactly on the boundary, push to next interval
+        if new_date <= now:
+            n += 1
+            new_date = cancel_date + timedelta(days=interval_days * n)
+        return new_date, n
+
+    def set_commitment_date(
         self,
         order_id: int,
         order_name: str,
-        current_commitment_date: datetime,
-        days: int = DEFAULT_HOLD_EXTENSION_DAYS,
+        new_date: datetime,
     ) -> tuple[OperationResult, Optional[datetime]]:
         """
-        Extend sale.order.commitment_date by N days.
+        Set sale.order.commitment_date to a specific date.
 
         Args:
             order_id: Sale order ID
             order_name: Sale order name for logging
-            current_commitment_date: Current commitment date
-            days: Number of days to add (default: 15)
+            new_date: New commitment date to set
 
         Returns:
             Tuple of (OperationResult, new_commitment_date)
         """
-        new_date = current_commitment_date + timedelta(days=days)
-
         result = self._safe_write(
             model=self.SO_MODEL,
             ids=[order_id],

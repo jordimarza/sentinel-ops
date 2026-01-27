@@ -145,10 +145,38 @@ def cli():
         description="Sentinel-Ops - ERP Operations Framework",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Examples (CLI):
     python main.py list
     python main.py run clean_old_orders --dry-run
-    python main.py run clean_old_orders --days=60 --limit=100
+    python main.py run check_ar_hold_violations --dry-run --limit 5
+    python main.py run date_compliance_all --dry-run --limit 3
+
+Examples (HTTP / Cloud Function):
+    # Health check
+    curl http://localhost:8080/health
+
+    # List jobs
+    curl http://localhost:8080/jobs
+
+    # Run a job (dry-run, BQ discovery)
+    curl -X POST http://localhost:8080/execute \\
+      -H "Content-Type: application/json" \\
+      -d '{"job": "check_ar_hold_violations", "dry_run": true}'
+
+    # Run with limit
+    curl -X POST http://localhost:8080/execute \\
+      -H "Content-Type: application/json" \\
+      -d '{"job": "check_ar_hold_violations", "dry_run": true, "params": {"limit": 5}}'
+
+    # Run with specific IDs
+    curl -X POST http://localhost:8080/execute \\
+      -H "Content-Type: application/json" \\
+      -d '{"job": "check_ar_hold_violations", "dry_run": true, "params": {"order_ids": [745296]}}'
+
+    # Run all date compliance (BQ discovery)
+    curl -X POST http://localhost:8080/execute \\
+      -H "Content-Type: application/json" \\
+      -d '{"job": "date_compliance_all", "dry_run": true, "params": {"limit": 3}}'
         """,
     )
 
@@ -170,14 +198,15 @@ Examples:
         action="store_true",
         help="Enable debug mode with verbose output",
     )
-    # Allow arbitrary parameters
     run_parser.add_argument(
-        "params",
-        nargs="*",
-        help="Job parameters as key=value pairs",
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of records to process",
     )
-
-    args = parser.parse_args()
+    args, extra_params = parser.parse_known_args()
+    # Capture extra key=value params that argparse doesn't know about
+    args.params = extra_params
 
     if not args.command:
         parser.print_help()
@@ -271,6 +300,10 @@ Examples:
                             elif value.lower() in ("false", "no"):
                                 value = False
                 params[key] = value
+
+        # Inject --limit flag into params (if provided and not already set)
+        if args.limit is not None and "limit" not in params:
+            params["limit"] = args.limit
 
         # Create context
         ctx = RequestContext.for_cli(

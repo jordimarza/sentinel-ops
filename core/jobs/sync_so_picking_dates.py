@@ -355,7 +355,7 @@ class SyncSOPickingDatesJob(BaseJob):
 
         try:
             rows = self.bq.query(query)
-            picking_ids = [row.get("picking_id") for row in rows if row.get("picking_id")]
+            picking_ids = list({row.get("picking_id") for row in rows if row.get("picking_id")})
             self.log.info(f"Found {len(picking_ids)} SO picking date mismatches from BQ")
             return picking_ids, None
         except Exception as e:
