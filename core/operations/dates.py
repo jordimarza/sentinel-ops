@@ -411,6 +411,7 @@ class DateComplianceOperations(BaseOperation):
         reference_value: datetime,
         moves_updated: int = 0,
         job_name: str = "sync_picking_dates",
+        new_deadline: Optional[datetime] = None,
     ) -> OperationResult:
         """
         Post chatter message documenting date synchronization.
@@ -421,11 +422,12 @@ class DateComplianceOperations(BaseOperation):
             record_name: Record name for logging
             old_scheduled: Original scheduled_date (None if unknown)
             old_deadline: Original date_deadline (None if unknown)
-            new_date: New date set
+            new_date: New scheduled_date set
             reference_field: Name of reference field (e.g., "commitment_date")
             reference_value: Value of reference field
             moves_updated: Number of moves updated
             job_name: Name of the job for attribution
+            new_deadline: New date_deadline if different from new_date (for split sync)
 
         Returns:
             OperationResult
@@ -433,6 +435,7 @@ class DateComplianceOperations(BaseOperation):
         old_scheduled_str = old_scheduled.strftime('%Y-%m-%d') if old_scheduled else "N/A"
         old_deadline_str = old_deadline.strftime('%Y-%m-%d') if old_deadline else "N/A"
         new_date_str = new_date.strftime('%Y-%m-%d')
+        new_deadline_str = (new_deadline or new_date).strftime('%Y-%m-%d')
         ref_date_str = reference_value.strftime('%Y-%m-%d')
 
         body = f"""
@@ -440,7 +443,7 @@ class DateComplianceOperations(BaseOperation):
 <p>Dates updated to match {reference_field} ({ref_date_str}).</p>
 <ul>
     <li><strong>Scheduled Date:</strong> {old_scheduled_str} → {new_date_str}</li>
-    <li><strong>Date Deadline:</strong> {old_deadline_str} → {new_date_str}</li>
+    <li><strong>Date Deadline:</strong> {old_deadline_str} → {new_deadline_str}</li>
     <li><strong>Moves Updated:</strong> {moves_updated}</li>
 </ul>
 <p><em>Updated by Sentinel-Ops: {job_name}</em></p>

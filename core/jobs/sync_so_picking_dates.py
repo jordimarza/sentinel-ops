@@ -328,6 +328,7 @@ class SyncSOPickingDatesJob(BaseJob):
                             reference_value=cancel_date,
                             moves_updated=picking_moves_updated,
                             job_name="sync_so_picking_dates",
+                            new_deadline=cancel_date,
                         )
                         result.add_operation(msg_result)
 
@@ -395,6 +396,7 @@ class SyncSOPickingDatesJob(BaseJob):
                         reference_value=target_date,
                         moves_updated=picking_moves_updated,
                         job_name="sync_so_picking_dates",
+                        new_deadline=deadline_date,
                     )
                     result.add_operation(msg_result)
 
