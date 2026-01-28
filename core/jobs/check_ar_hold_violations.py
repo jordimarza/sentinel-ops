@@ -272,6 +272,7 @@ class CheckArHoldViolationsJob(BaseJob):
                         pickings_updated += 1
 
                     # Step 4: Sync move dates
+                    picking_moves_updated = 0
                     move_results = date_ops.sync_move_dates(
                         picking_id=picking_id,
                         new_date=new_commitment,
@@ -279,8 +280,32 @@ class CheckArHoldViolationsJob(BaseJob):
                     for mr in move_results:
                         result.add_operation(mr)
                         if mr.success:
+                            picking_moves_updated += 1
                             order_moves_updated += 1
                             moves_updated += 1
+
+                    # Step 4b: Post chatter message on picking
+                    if pick_result.success:
+                        old_sched = picking.get("scheduled_date")
+                        old_dead = picking.get("date_deadline")
+                        if isinstance(old_sched, str):
+                            old_sched = datetime.strptime(old_sched, "%Y-%m-%d %H:%M:%S")
+                        if isinstance(old_dead, str):
+                            old_dead = datetime.strptime(old_dead, "%Y-%m-%d %H:%M:%S")
+
+                        picking_msg = date_ops.post_date_sync_message(
+                            model="stock.picking",
+                            record_id=picking_id,
+                            record_name=picking_name,
+                            old_scheduled=old_sched,
+                            old_deadline=old_dead,
+                            new_date=new_commitment,
+                            reference_field="commitment_date (AR-HOLD extension)",
+                            reference_value=new_commitment,
+                            moves_updated=picking_moves_updated,
+                            job_name="check_ar_hold_violations",
+                        )
+                        result.add_operation(picking_msg)
 
                 # Step 5: Post chatter message
                 msg_result = date_ops.post_ar_hold_message(

@@ -165,11 +165,12 @@ class TestCleanEmptyDraftTransfersVerification:
 
         # Pass mocked clients to job
         job = CleanEmptyDraftTransfersJob(test_context, odoo=mock_odoo, bq=mock_bq, log=mock_logger)
-        result = job._verify_empty_draft(12345)
+        picking, skip_reason = job._verify_empty_draft(12345)
 
-        assert result is not None
-        assert result["id"] == 12345
-        assert result["state"] == "draft"
+        assert picking is not None
+        assert skip_reason is None
+        assert picking["id"] == 12345
+        assert picking["state"] == "draft"
 
     def test_verify_empty_draft_has_moves(
         self, mock_odoo, mock_bq, test_context, mock_logger, sample_draft_picking_with_moves
@@ -178,9 +179,10 @@ class TestCleanEmptyDraftTransfersVerification:
         mock_odoo.search_read.return_value = [sample_draft_picking_with_moves]
 
         job = CleanEmptyDraftTransfersJob(test_context, odoo=mock_odoo, bq=mock_bq, log=mock_logger)
-        result = job._verify_empty_draft(12346)
+        picking, skip_reason = job._verify_empty_draft(12346)
 
-        assert result is None
+        assert picking is None
+        assert skip_reason == "has_moves"
 
     def test_verify_empty_draft_not_draft_state(
         self, mock_odoo, mock_bq, test_context, mock_logger, sample_non_draft_picking
@@ -189,9 +191,10 @@ class TestCleanEmptyDraftTransfersVerification:
         mock_odoo.search_read.return_value = [sample_non_draft_picking]
 
         job = CleanEmptyDraftTransfersJob(test_context, odoo=mock_odoo, bq=mock_bq, log=mock_logger)
-        result = job._verify_empty_draft(12347)
+        picking, skip_reason = job._verify_empty_draft(12347)
 
-        assert result is None
+        assert picking is None
+        assert skip_reason == "not_draft"
 
     def test_verify_empty_draft_not_found(
         self, mock_odoo, mock_bq, test_context, mock_logger
@@ -200,9 +203,10 @@ class TestCleanEmptyDraftTransfersVerification:
         mock_odoo.search_read.return_value = []
 
         job = CleanEmptyDraftTransfersJob(test_context, odoo=mock_odoo, bq=mock_bq, log=mock_logger)
-        result = job._verify_empty_draft(99999)
+        picking, skip_reason = job._verify_empty_draft(99999)
 
-        assert result is None
+        assert picking is None
+        assert skip_reason == "not_found"
 
 
 # --- Job Execution Tests ---

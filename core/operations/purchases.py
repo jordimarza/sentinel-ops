@@ -204,6 +204,54 @@ class PurchaseOperations(BaseOperation):
 
         return results
 
+    def post_picking_date_sync_message(
+        self,
+        picking_id: int,
+        picking_name: str,
+        new_date: datetime,
+        po_name: str,
+        old_scheduled: Optional[datetime] = None,
+        old_deadline: Optional[datetime] = None,
+        moves_updated: int = 0,
+    ) -> OperationResult:
+        """
+        Post chatter message on picking documenting PO date sync.
+
+        Args:
+            picking_id: Stock picking ID
+            picking_name: Picking name for logging
+            new_date: New date set on the picking
+            po_name: Parent PO name for reference
+            old_scheduled: Original scheduled_date (None if unknown)
+            old_deadline: Original date_deadline (None if unknown)
+            moves_updated: Number of moves updated in this picking
+
+        Returns:
+            OperationResult
+        """
+        old_scheduled_str = old_scheduled.strftime('%Y-%m-%d') if old_scheduled else "N/A"
+        old_deadline_str = old_deadline.strftime('%Y-%m-%d') if old_deadline else "N/A"
+        new_date_str = new_date.strftime('%Y-%m-%d')
+
+        body = f"""
+<p><strong>Date Compliance: Picking Dates Synchronized</strong></p>
+<p>Dates updated to match {po_name} date_planned ({new_date_str}).</p>
+<ul>
+    <li><strong>Scheduled Date:</strong> {old_scheduled_str} → {new_date_str}</li>
+    <li><strong>Date Deadline:</strong> {old_deadline_str} → {new_date_str}</li>
+    <li><strong>Moves Updated:</strong> {moves_updated}</li>
+</ul>
+<p><em>Updated by Sentinel-Ops: sync_po_picking_dates</em></p>
+"""
+
+        return self._safe_message_post(
+            model=self.PICKING_MODEL,
+            record_id=picking_id,
+            body=body.strip(),
+            message_type="comment",
+            record_name=picking_name,
+        )
+
     def post_po_date_sync_message(
         self,
         po_id: int,

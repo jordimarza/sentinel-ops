@@ -221,6 +221,9 @@ class SyncPOPickingDatesJob(BaseJob):
                 )
                 result.errors.append(f"Candidate error: {e}")
 
+        # Post chatter messages on each updated picking
+        self._post_picking_messages(result, candidates, po_ops, pickings_processed, moves_processed)
+
         # Post summary messages per PO
         self._post_summary_messages(result, candidates, po_ops, pickings_updated, moves_updated)
 
@@ -237,6 +240,50 @@ class SyncPOPickingDatesJob(BaseJob):
 
         result.complete()
         return result
+
+    def _post_picking_messages(
+        self,
+        result: JobResult,
+        candidates: list[dict[str, Any]],
+        po_ops: PurchaseOperations,
+        pickings_processed: set[int],
+        moves_processed: set[int],
+    ) -> None:
+        """Post chatter messages on each updated picking."""
+        if not pickings_processed:
+            return
+
+        # Group candidates by picking_id to gather context
+        picking_info: dict[int, dict] = {}
+        for c in candidates:
+            pid = c.get("picking_id")
+            if pid and pid in pickings_processed:
+                if pid not in picking_info:
+                    picking_info[pid] = {
+                        "picking_name": c.get("picking_name") or f"picking-{pid}",
+                        "po_name": c.get("po_name", ""),
+                        "po_date_planned": self._parse_date(c.get("po_date_planned")),
+                        "scheduled_date": self._parse_date(c.get("scheduled_date")),
+                        "moves_updated": 0,
+                    }
+                # Count moves updated for this picking
+                move_id = c.get("move_id")
+                if move_id and move_id in moves_processed:
+                    picking_info[pid]["moves_updated"] += 1
+
+        # Post one message per picking
+        for picking_id, info in picking_info.items():
+            new_date = info["po_date_planned"] or datetime.now()
+            picking_msg = po_ops.post_picking_date_sync_message(
+                picking_id=picking_id,
+                picking_name=info["picking_name"],
+                new_date=new_date,
+                po_name=info["po_name"],
+                old_scheduled=info["scheduled_date"],
+                old_deadline=None,  # BQ query doesn't include date_deadline
+                moves_updated=info["moves_updated"],
+            )
+            result.add_operation(picking_msg)
 
     def _post_summary_messages(
         self,
@@ -536,6 +583,7 @@ class SyncPOPickingDatesJob(BaseJob):
                         pickings_updated += 1
 
                         # Sync move dates (header-level)
+                        picking_moves_updated = 0
                         move_results = po_ops.sync_move_dates(
                             picking_id=picking_id,
                             new_date=date_planned,
@@ -543,8 +591,21 @@ class SyncPOPickingDatesJob(BaseJob):
                         for mr in move_results:
                             result.add_operation(mr)
                             if mr.success:
+                                picking_moves_updated += 1
                                 po_moves_updated += 1
                                 moves_updated += 1
+
+                        # Post chatter message on picking
+                        picking_msg = po_ops.post_picking_date_sync_message(
+                            picking_id=picking_id,
+                            picking_name=picking_name,
+                            new_date=date_planned,
+                            po_name=po_name,
+                            old_scheduled=old_scheduled,
+                            old_deadline=old_deadline,
+                            moves_updated=picking_moves_updated,
+                        )
+                        result.add_operation(picking_msg)
 
                 # Line-level sync (bonus feature)
                 if sync_line_level:
