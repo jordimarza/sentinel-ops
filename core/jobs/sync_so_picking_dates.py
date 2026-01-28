@@ -276,12 +276,12 @@ class SyncSOPickingDatesJob(BaseJob):
                         skip_reasons["return_no_cancel_date"] = skip_reasons.get("return_no_cancel_date", 0) + 1
                         continue
 
-                    # Safeguard: if date_deadline already matches ah_cancel_date, already processed
+                    # Check if return dates already match targets
                     cancel_date_date = cancel_date.date() if hasattr(cancel_date, 'date') else cancel_date
                     old_deadline_date = old_deadline.date() if old_deadline and hasattr(old_deadline, 'date') else None
                     if old_deadline_date == cancel_date_date:
                         result.records_skipped += 1
-                        skip_reasons["return_already_processed"] = skip_reasons.get("return_already_processed", 0) + 1
+                        skip_reasons["dates_match"] = skip_reasons.get("dates_match", 0) + 1
                         continue
 
                     # Return: date_deadline = ah_cancel_date, scheduled_date = today + 15
