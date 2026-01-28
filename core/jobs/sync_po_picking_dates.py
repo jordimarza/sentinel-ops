@@ -166,7 +166,9 @@ class SyncPOPickingDatesJob(BaseJob):
 
         # Group by picking for efficient header updates
         pickings_processed: set[int] = set()
+        pickings_skipped: set[int] = set()
         moves_processed: set[int] = set()
+        skip_reasons: dict[str, int] = {}
 
         for candidate in candidates:
             try:
@@ -180,10 +182,28 @@ class SyncPOPickingDatesJob(BaseJob):
                 pol_date_planned = self._parse_date(candidate.get("pol_date_planned"))
 
                 # Header update (picking dates)
-                if needs_header and picking_id and picking_id not in pickings_processed:
+                if needs_header and picking_id and picking_id not in pickings_processed and picking_id not in pickings_skipped:
                     picking_name = candidate.get("picking_name") or f"picking-{picking_id}"
 
                     if po_date_planned:
+                        # Verify against live Odoo data (BQ can be stale)
+                        live_picking = self.odoo.search_read(
+                            "stock.picking",
+                            [("id", "=", picking_id)],
+                            fields=["scheduled_date", "date_deadline"],
+                        )
+                        if live_picking:
+                            live_sched = self._parse_date(live_picking[0].get("scheduled_date"))
+                            live_dead = self._parse_date(live_picking[0].get("date_deadline"))
+                            target = po_date_planned.date() if hasattr(po_date_planned, 'date') else po_date_planned
+                            live_sched_date = live_sched.date() if live_sched and hasattr(live_sched, 'date') else None
+                            live_dead_date = live_dead.date() if live_dead and hasattr(live_dead, 'date') else None
+
+                            if live_sched_date == target and live_dead_date == target:
+                                pickings_skipped.add(picking_id)
+                                skip_reasons["dates_match"] = skip_reasons.get("dates_match", 0) + 1
+                                continue
+
                         pick_result = po_ops.sync_picking_dates(
                             picking_id=picking_id,
                             new_date=po_date_planned,
@@ -205,6 +225,21 @@ class SyncPOPickingDatesJob(BaseJob):
                     target_date = pol_date_planned or po_date_planned
 
                     if target_date:
+                        # Verify against live Odoo data (BQ can be stale)
+                        live_move = self.odoo.search_read(
+                            "stock.move",
+                            [("id", "=", move_id)],
+                            fields=["date"],
+                        )
+                        if live_move:
+                            live_date = self._parse_date(live_move[0].get("date"))
+                            target_d = target_date.date() if hasattr(target_date, 'date') else target_date
+                            live_d = live_date.date() if live_date and hasattr(live_date, 'date') else None
+                            if live_d == target_d:
+                                moves_processed.add(move_id)
+                                skip_reasons["dates_match"] = skip_reasons.get("dates_match", 0) + 1
+                                continue
+
                         move_result = po_ops.sync_single_move_date(
                             move_id=move_id,
                             new_date=target_date,
@@ -231,7 +266,9 @@ class SyncPOPickingDatesJob(BaseJob):
         self._post_picking_messages(result, candidates, po_ops, pickings_processed, moves_processed)
 
         # Set KPIs
-        result.kpis = {
+        result.records_checked = po_count
+        result.records_skipped = sum(skip_reasons.values())
+        kpis: dict[str, Any] = {
             "pos_checked": po_count,
             "pickings_updated": pickings_updated,
             "moves_updated": moves_updated,
@@ -240,6 +277,9 @@ class SyncPOPickingDatesJob(BaseJob):
             "both_updates": both_count,
             "exceptions": len(result.errors),
         }
+        if skip_reasons:
+            kpis["skip_reasons"] = skip_reasons
+        result.kpis = kpis
 
         result.complete()
         return result
