@@ -165,13 +165,13 @@ class SyncPOPickingDatesJob(BaseJob):
         po_count = len({c.get("po_id") for c in candidates if c.get("po_id")})
         self.log.info(f"Processing {len(candidates)} candidates from {po_count} POs")
 
+        result.records_checked = po_count
+
         # Group by picking for efficient header updates
-        pickings_processed = set()
-        moves_processed = set()
+        pickings_processed: set[int] = set()
+        moves_processed: set[int] = set()
 
         for candidate in candidates:
-            result.records_checked += 1
-
             try:
                 picking_id = candidate.get("picking_id")
                 move_id = candidate.get("move_id")
@@ -239,7 +239,6 @@ class SyncPOPickingDatesJob(BaseJob):
         # Set KPIs
         result.kpis = {
             "pos_checked": po_count,
-            "candidates_processed": result.records_checked,
             "pickings_updated": pickings_updated,
             "moves_updated": moves_updated,
             "header_only_updates": header_only_count,
@@ -352,7 +351,7 @@ class SyncPOPickingDatesJob(BaseJob):
                     return None
         return None
 
-    def _discover_from_bq(self, limit: Optional[int]) -> tuple[list[dict], Optional[str]]:
+    def _discover_from_bq(self, limit: Optional[int] = None) -> tuple[list[dict], Optional[str]]:
         """
         Discover PO picking date mismatches from BigQuery.
 
@@ -360,8 +359,6 @@ class SyncPOPickingDatesJob(BaseJob):
             Tuple of (candidates list, error message or None)
         """
         query = self.BQ_QUERY
-        if limit:
-            query += f"\nLIMIT {limit}"
 
         try:
             rows = self.bq.query(query)
