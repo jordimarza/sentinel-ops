@@ -6,7 +6,7 @@ the parent sale.order commitment_date.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from core.jobs.registry import register_job
@@ -123,11 +123,11 @@ class SyncSOPickingDatesJob(BaseJob):
 
             for order_id in order_ids:
                 try:
-                    # Get order commitment_date
+                    # Get order commitment_date and ah_cancel_date
                     orders = self.odoo.search_read(
                         "sale.order",
                         [("id", "=", order_id)],
-                        fields=["id", "name", "commitment_date"],
+                        fields=["id", "name", "commitment_date", "ah_cancel_date"],
                     )
 
                     if not orders:
@@ -139,27 +139,27 @@ class SyncSOPickingDatesJob(BaseJob):
                     if not commitment_date_str:
                         continue
 
-                    if isinstance(commitment_date_str, str):
-                        commitment_date = datetime.strptime(
-                            commitment_date_str, "%Y-%m-%d %H:%M:%S"
-                        )
-                    else:
-                        commitment_date = commitment_date_str
+                    commitment_date = self._parse_date(commitment_date_str)
+                    cancel_date = self._parse_date(order.get("ah_cancel_date"))
 
                     # Get open pickings for this order
                     pickings = date_ops.get_open_pickings_for_order(order_id)
 
                     for picking in pickings:
+                        origin = picking.get("origin") or ""
+                        is_return = self._is_return_picking(origin)
                         pickings_to_process.append({
                             "picking_id": picking["id"],
                             "picking_name": picking.get("name"),
                             "old_scheduled": picking.get("scheduled_date"),
                             "old_deadline": picking.get("date_deadline"),
                             "target_date": commitment_date,
+                            "cancel_date": cancel_date,
                             "reference_field": "commitment_date",
                             "parent_model": "sale.order",
                             "parent_id": order_id,
                             "parent_name": order["name"],
+                            "is_return": is_return,
                         })
 
                 except Exception as e:
@@ -182,7 +182,7 @@ class SyncSOPickingDatesJob(BaseJob):
                     pickings = self.odoo.search_read(
                         "stock.picking",
                         [("id", "=", picking_id)],
-                        fields=["id", "name", "sale_id", "scheduled_date", "date_deadline"],
+                        fields=["id", "name", "sale_id", "scheduled_date", "date_deadline", "origin"],
                     )
 
                     if not pickings:
@@ -197,34 +197,33 @@ class SyncSOPickingDatesJob(BaseJob):
                     order_id = sale_id[0]
                     order_name = sale_id[1] if len(sale_id) > 1 else f"order-{order_id}"
 
-                    # Get order commitment_date
+                    # Get order commitment_date and ah_cancel_date
                     orders = self.odoo.search_read(
                         "sale.order",
                         [("id", "=", order_id)],
-                        fields=["commitment_date"],
+                        fields=["commitment_date", "ah_cancel_date"],
                     )
 
                     if not orders or not orders[0].get("commitment_date"):
                         continue
 
-                    commitment_date_str = orders[0]["commitment_date"]
-                    if isinstance(commitment_date_str, str):
-                        commitment_date = datetime.strptime(
-                            commitment_date_str, "%Y-%m-%d %H:%M:%S"
-                        )
-                    else:
-                        commitment_date = commitment_date_str
+                    commitment_date = self._parse_date(orders[0]["commitment_date"])
+                    cancel_date = self._parse_date(orders[0].get("ah_cancel_date"))
 
+                    origin = picking.get("origin") or ""
+                    is_return = self._is_return_picking(origin)
                     pickings_to_process.append({
                         "picking_id": picking_id,
                         "picking_name": picking.get("name"),
                         "old_scheduled": picking.get("scheduled_date"),
                         "old_deadline": picking.get("date_deadline"),
                         "target_date": commitment_date,
+                        "cancel_date": cancel_date,
                         "reference_field": "commitment_date",
                         "parent_model": "sale.order",
                         "parent_id": order_id,
                         "parent_name": order_name,
+                        "is_return": is_return,
                     })
 
                 except Exception as e:
@@ -268,14 +267,89 @@ class SyncSOPickingDatesJob(BaseJob):
                 if isinstance(old_deadline, str):
                     old_deadline = datetime.strptime(old_deadline, "%Y-%m-%d %H:%M:%S")
 
-                # Check if update is needed
+                # Handle return pickings differently
+                if pick_data.get("is_return"):
+                    cancel_date = pick_data.get("cancel_date")
+                    if not cancel_date:
+                        # No ah_cancel_date on order, skip return
+                        result.records_skipped += 1
+                        skip_reasons["return_no_cancel_date"] = skip_reasons.get("return_no_cancel_date", 0) + 1
+                        continue
+
+                    # Safeguard: if date_deadline already matches ah_cancel_date, already processed
+                    cancel_date_date = cancel_date.date() if hasattr(cancel_date, 'date') else cancel_date
+                    old_deadline_date = old_deadline.date() if old_deadline and hasattr(old_deadline, 'date') else None
+                    if old_deadline_date == cancel_date_date:
+                        result.records_skipped += 1
+                        skip_reasons["return_already_processed"] = skip_reasons.get("return_already_processed", 0) + 1
+                        continue
+
+                    # Return: date_deadline = ah_cancel_date, scheduled_date = today + 15
+                    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                    return_scheduled = today + timedelta(days=15)
+                    pick_data["reference_field"] = "return_default"
+                    self.log.info(
+                        f"Return picking {picking_name}: deadline={cancel_date_date}, scheduled={return_scheduled.strftime('%Y-%m-%d')}",
+                        data={"picking_id": picking_id},
+                    )
+
+                    # Use custom sync for returns (different dates for each field)
+                    pick_result = date_ops.sync_picking_dates_split(
+                        picking_id=picking_id,
+                        scheduled_date=return_scheduled,
+                        deadline_date=cancel_date,
+                        picking_name=picking_name,
+                    )
+                    result.add_operation(pick_result)
+
+                    if pick_result.success:
+                        pickings_updated += 1
+                        result.records_updated += 1
+
+                        move_results = date_ops.sync_move_dates(
+                            picking_id=picking_id,
+                            new_date=return_scheduled,
+                        )
+                        picking_moves_updated = 0
+                        for mr in move_results:
+                            result.add_operation(mr)
+                            if mr.success:
+                                picking_moves_updated += 1
+                                moves_updated += 1
+
+                        msg_result = date_ops.post_date_sync_message(
+                            model="stock.picking",
+                            record_id=picking_id,
+                            record_name=picking_name,
+                            old_scheduled=old_scheduled,
+                            old_deadline=old_deadline,
+                            new_date=return_scheduled,
+                            reference_field="return (ah_cancel_date → deadline, today+15 → scheduled)",
+                            reference_value=cancel_date,
+                            moves_updated=picking_moves_updated,
+                            job_name="sync_so_picking_dates",
+                        )
+                        result.add_operation(msg_result)
+
+                        self.log.success(
+                            picking_id,
+                            f"Return {picking_name}: deadline={cancel_date_date}, scheduled={return_scheduled.strftime('%Y-%m-%d')}, {picking_moves_updated} moves",
+                        )
+                    continue
+
+                # Normal pickings: scheduled_date=commitment_date, date_deadline=ah_cancel_date
+                cancel_date = pick_data.get("cancel_date")
+                # Fall back to commitment_date if no ah_cancel_date
+                deadline_date = cancel_date if cancel_date else target_date
+
                 target_date_date = target_date.date() if hasattr(target_date, 'date') else target_date
+                deadline_date_date = deadline_date.date() if hasattr(deadline_date, 'date') else deadline_date
                 old_scheduled_date = old_scheduled.date() if old_scheduled and hasattr(old_scheduled, 'date') else None
                 old_deadline_date = old_deadline.date() if old_deadline and hasattr(old_deadline, 'date') else None
 
                 needs_update = (
                     old_scheduled_date != target_date_date or
-                    old_deadline_date != target_date_date
+                    old_deadline_date != deadline_date_date
                 )
 
                 if not needs_update:
@@ -283,10 +357,11 @@ class SyncSOPickingDatesJob(BaseJob):
                     skip_reasons["dates_match"] = skip_reasons.get("dates_match", 0) + 1
                     continue
 
-                # Sync picking dates
-                pick_result = date_ops.sync_picking_dates(
+                # Sync picking dates (split: scheduled=commitment, deadline=cancel)
+                pick_result = date_ops.sync_picking_dates_split(
                     picking_id=picking_id,
-                    new_date=target_date,
+                    scheduled_date=target_date,
+                    deadline_date=deadline_date,
                     picking_name=picking_name,
                 )
                 result.add_operation(pick_result)
@@ -297,7 +372,7 @@ class SyncSOPickingDatesJob(BaseJob):
                     pickings_updated += 1
                     result.records_updated += 1
 
-                    # Sync move dates
+                    # Sync move dates to commitment_date
                     move_results = date_ops.sync_move_dates(
                         picking_id=picking_id,
                         new_date=target_date,
@@ -316,7 +391,7 @@ class SyncSOPickingDatesJob(BaseJob):
                         old_scheduled=old_scheduled,
                         old_deadline=old_deadline,
                         new_date=target_date,
-                        reference_field=pick_data["reference_field"],
+                        reference_field="commitment_date → scheduled, ah_cancel_date → deadline",
                         reference_value=target_date,
                         moves_updated=picking_moves_updated,
                         job_name="sync_so_picking_dates",
@@ -325,7 +400,7 @@ class SyncSOPickingDatesJob(BaseJob):
 
                     self.log.success(
                         picking_id,
-                        f"Synced dates for {picking_name}: {picking_moves_updated} moves",
+                        f"Synced {picking_name}: scheduled={target_date_date}, deadline={deadline_date_date}, {picking_moves_updated} moves",
                     )
 
             except Exception as e:
@@ -341,6 +416,26 @@ class SyncSOPickingDatesJob(BaseJob):
 
         result.complete()
         return result
+
+    @staticmethod
+    def _is_return_picking(origin: str) -> bool:
+        """Check if a picking is a return based on its origin field."""
+        return origin.lower().startswith("return of")
+
+    @staticmethod
+    def _parse_date(value) -> Optional[datetime]:
+        """Parse a date string from Odoo into a datetime, or return None."""
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value
+        try:
+            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            try:
+                return datetime.strptime(value, "%Y-%m-%d")
+            except ValueError:
+                return None
 
     def _discover_from_bq(self, limit: Optional[int]) -> tuple[list[int], Optional[str]]:
         """

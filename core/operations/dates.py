@@ -216,6 +216,39 @@ class DateComplianceOperations(BaseOperation):
             record_name=picking_name,
         )
 
+    def sync_picking_dates_split(
+        self,
+        picking_id: int,
+        scheduled_date: datetime,
+        deadline_date: datetime,
+        picking_name: str,
+    ) -> OperationResult:
+        """
+        Sync picking with different scheduled_date and date_deadline.
+
+        Used for return pickings where scheduled_date (today+15) differs
+        from date_deadline (ah_cancel_date).
+
+        Args:
+            picking_id: Stock picking ID
+            scheduled_date: New scheduled_date to set
+            deadline_date: New date_deadline to set
+            picking_name: Picking name for logging
+
+        Returns:
+            OperationResult
+        """
+        return self._safe_write(
+            model=self.PICKING_MODEL,
+            ids=[picking_id],
+            values={
+                "scheduled_date": scheduled_date.strftime("%Y-%m-%d %H:%M:%S"),
+                "date_deadline": deadline_date.strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            action="sync_picking_dates_return",
+            record_name=picking_name,
+        )
+
     def sync_move_dates(
         self,
         picking_id: int,
@@ -273,7 +306,7 @@ class DateComplianceOperations(BaseOperation):
                 ("sale_id", "=", order_id),
                 ("state", "in", self.OPEN_PICKING_STATES),
             ],
-            fields=["id", "name", "scheduled_date", "date_deadline"],
+            fields=["id", "name", "scheduled_date", "date_deadline", "origin"],
         )
 
     def check_partner_has_block_tag(
