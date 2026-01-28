@@ -233,9 +233,6 @@ class SyncPOPickingDatesJob(BaseJob):
         # Post chatter messages on each updated picking
         self._post_picking_messages(result, candidates, po_ops, pickings_processed, moves_processed)
 
-        # Post summary messages per PO
-        self._post_summary_messages(result, candidates, po_ops, pickings_updated, moves_updated)
-
         # Set KPIs
         result.kpis = {
             "pos_checked": po_count,
@@ -293,47 +290,6 @@ class SyncPOPickingDatesJob(BaseJob):
                 moves_updated=info["moves_updated"],
             )
             result.add_operation(picking_msg)
-
-    def _post_summary_messages(
-        self,
-        result: JobResult,
-        candidates: list[dict[str, Any]],
-        po_ops: PurchaseOperations,
-        pickings_updated: int,
-        moves_updated: int,
-    ) -> None:
-        """Post chatter messages summarizing updates per PO."""
-        # Group by PO for summary messages
-        po_summaries: dict[int, dict] = {}
-        for c in candidates:
-            po_id = c.get("po_id")
-            if po_id:
-                if po_id not in po_summaries:
-                    po_summaries[po_id] = {
-                        "po_name": c.get("po_name", f"PO-{po_id}"),
-                        "date_planned": self._parse_date(c.get("po_date_planned")),
-                        "pickings": 0,
-                        "moves": 0,
-                    }
-                if c.get("needs_header_update"):
-                    po_summaries[po_id]["pickings"] += 1
-                if c.get("needs_line_update"):
-                    po_summaries[po_id]["moves"] += 1
-
-        # Post one message per PO
-        for po_id, summary in po_summaries.items():
-            if summary["pickings"] > 0 or summary["moves"] > 0:
-                msg_result = po_ops.post_po_date_sync_message(
-                    po_id=po_id,
-                    po_name=summary["po_name"],
-                    old_scheduled=None,
-                    old_deadline=None,
-                    new_date=summary["date_planned"] or datetime.now(),
-                    pickings_updated=summary["pickings"],
-                    moves_updated=summary["moves"],
-                    line_level_sync=summary["moves"] > 0,
-                )
-                result.add_operation(msg_result)
 
     def _parse_date(self, date_val: Any) -> Optional[datetime]:
         """Parse date from various formats."""
@@ -622,20 +578,8 @@ class SyncPOPickingDatesJob(BaseJob):
                         if lr.success:
                             line_level_moves_updated += 1
 
-                # Post chatter message on PO if anything was updated
+                # PO itself is not edited — picking messages document the changes
                 if po_pickings_updated > 0:
-                    msg_result = po_ops.post_po_date_sync_message(
-                        po_id=po_id,
-                        po_name=po_name,
-                        old_scheduled=None,  # Multiple pickings, can't show single old date
-                        old_deadline=None,
-                        new_date=date_planned,
-                        pickings_updated=po_pickings_updated,
-                        moves_updated=po_moves_updated + (line_level_moves_updated if sync_line_level else 0),
-                        line_level_sync=sync_line_level,
-                    )
-                    result.add_operation(msg_result)
-
                     result.records_updated += 1
 
                     self.log.success(
