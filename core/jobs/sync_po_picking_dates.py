@@ -79,7 +79,6 @@ class SyncPOPickingDatesJob(BaseJob):
         po_ids: Optional[list[int]] = None,
         picking_ids: Optional[list[int]] = None,
         limit: Optional[int] = None,
-        sync_line_level: bool = False,
         **_params
     ) -> JobResult:
         """
@@ -92,8 +91,7 @@ class SyncPOPickingDatesJob(BaseJob):
                 - move_id, pol_date_planned, needs_line_update (bool) (for line updates)
             po_ids: List of purchase order IDs (full sync - both header and line)
             picking_ids: List of picking IDs (header sync only)
-            limit: Maximum number of records to process
-            sync_line_level: Enable line-level sync when using po_ids (default: False)
+            limit: Maximum number of POs to process
 
         Returns:
             JobResult with execution details
@@ -104,7 +102,6 @@ class SyncPOPickingDatesJob(BaseJob):
             "po_ids": po_ids,
             "picking_ids": picking_ids,
             "limit": limit,
-            "sync_line_level": sync_line_level,
         })
 
         # Discover from BQ if no explicit inputs provided
@@ -123,7 +120,7 @@ class SyncPOPickingDatesJob(BaseJob):
         if candidates:
             return self._process_candidates(result, candidates, limit)
         else:
-            return self._process_simple(result, po_ids, picking_ids, limit, sync_line_level)
+            return self._process_simple(result, po_ids, picking_ids, limit)
 
     def _process_candidates(
         self,
@@ -348,9 +345,8 @@ class SyncPOPickingDatesJob(BaseJob):
         po_ids: Optional[list[int]],
         picking_ids: Optional[list[int]],
         limit: Optional[int],
-        sync_line_level: bool,
     ) -> JobResult:
-        """Original simple processing for po_ids/picking_ids input."""
+        """Processing for explicit po_ids/picking_ids input."""
 
         # Initialize operations
         po_ops = PurchaseOperations(self.odoo, self.ctx, self.log)
@@ -359,7 +355,6 @@ class SyncPOPickingDatesJob(BaseJob):
         pos_checked = 0
         pickings_updated = 0
         moves_updated = 0
-        line_level_moves_updated = 0
         skip_reasons: dict[str, int] = {}
 
         # Collect POs to process
@@ -545,15 +540,12 @@ class SyncPOPickingDatesJob(BaseJob):
                         po_pickings_updated += 1
                         pickings_updated += 1
 
-                        # Sync move dates (header-level)
+                        # Sync move dates to PO line date_planned
                         picking_moves_updated = 0
-                        move_results = po_ops.sync_move_dates(
-                            picking_id=picking_id,
-                            new_date=date_planned,
-                        )
-                        for mr in move_results:
-                            result.add_operation(mr)
-                            if mr.success:
+                        line_results = po_ops.sync_move_dates_to_line_planned(po_id)
+                        for lr in line_results:
+                            result.add_operation(lr)
+                            if lr.success:
                                 picking_moves_updated += 1
                                 po_moves_updated += 1
                                 moves_updated += 1
@@ -569,14 +561,6 @@ class SyncPOPickingDatesJob(BaseJob):
                             moves_updated=picking_moves_updated,
                         )
                         result.add_operation(picking_msg)
-
-                # Line-level sync (bonus feature)
-                if sync_line_level:
-                    line_results = po_ops.sync_move_dates_to_line_planned(po_id)
-                    for lr in line_results:
-                        result.add_operation(lr)
-                        if lr.success:
-                            line_level_moves_updated += 1
 
                 # PO itself is not edited — picking messages document the changes
                 if po_pickings_updated > 0:
@@ -600,7 +584,7 @@ class SyncPOPickingDatesJob(BaseJob):
 
         # Set KPIs
         result.kpis = self._build_kpis(
-            result, pos_checked, pickings_updated, moves_updated, line_level_moves_updated, skip_reasons
+            result, pos_checked, pickings_updated, moves_updated, skip_reasons
         )
 
         result.complete()
@@ -612,7 +596,6 @@ class SyncPOPickingDatesJob(BaseJob):
         pos_checked: int,
         pickings_updated: int,
         moves_updated: int,
-        line_level_moves_updated: int,
         skip_reasons: dict[str, int],
     ) -> dict:
         """Build KPIs dict for the job result."""
@@ -621,7 +604,6 @@ class SyncPOPickingDatesJob(BaseJob):
             "pickings_updated": pickings_updated,
             "pos_skipped": sum(skip_reasons.values()),
             "moves_updated": moves_updated,
-            "line_level_moves_updated": line_level_moves_updated,
             "exceptions": len(result.errors),
         }
         if skip_reasons:
