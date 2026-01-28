@@ -148,11 +148,22 @@ class SyncPOPickingDatesJob(BaseJob):
         line_only_count = 0
         both_count = 0
 
-        # Apply limit
-        if limit and len(candidates) > limit:
-            candidates = candidates[:limit]
+        # Apply limit by PO (not by raw row count)
+        if limit:
+            unique_po_ids: list[int] = []
+            seen_pos: set[int] = set()
+            for c in candidates:
+                po_id = c.get("po_id")
+                if po_id and po_id not in seen_pos:
+                    seen_pos.add(po_id)
+                    unique_po_ids.append(po_id)
+            if len(unique_po_ids) > limit:
+                allowed_pos = set(unique_po_ids[:limit])
+                candidates = [c for c in candidates if c.get("po_id") in allowed_pos]
 
-        self.log.info(f"Processing {len(candidates)} candidates from BQ query")
+        # Count unique POs for logging
+        po_count = len({c.get("po_id") for c in candidates if c.get("po_id")})
+        self.log.info(f"Processing {len(candidates)} candidates from {po_count} POs")
 
         # Group by picking for efficient header updates
         pickings_processed = set()
@@ -211,8 +222,6 @@ class SyncPOPickingDatesJob(BaseJob):
                             if not needs_header:
                                 line_only_count += 1
 
-                result.records_updated += 1
-
             except Exception as e:
                 self.log.error(
                     f"Exception processing candidate",
@@ -229,6 +238,7 @@ class SyncPOPickingDatesJob(BaseJob):
 
         # Set KPIs
         result.kpis = {
+            "pos_checked": po_count,
             "candidates_processed": result.records_checked,
             "pickings_updated": pickings_updated,
             "moves_updated": moves_updated,
