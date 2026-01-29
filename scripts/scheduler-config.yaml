@@ -1,0 +1,99 @@
+# Cloud Scheduler Configuration for Sentinel-Ops
+#
+# Each job defines:
+#   - name: Cloud Scheduler job name
+#   - schedule: Cron expression (in timezone below)
+#   - job: Sentinel-ops job to run
+#   - params: Parameters to pass to the job
+#   - enabled: Whether to create/keep the schedule (set false to delete)
+#
+# Cron format: minute hour day-of-month month day-of-week
+# Examples:
+#   "0 8 * * *"     = Every day at 8:00 AM
+#   "0 */4 * * *"   = Every 4 hours
+#   "0 8 * * 1-5"   = Weekdays at 8:00 AM
+#   "*/30 * * * *"  = Every 30 minutes
+
+project: alohas-analytics
+region: europe-west1
+timezone: Europe/Madrid
+
+# Cloud Function URL
+function_url: https://sentinel-ops-659945993606.europe-west1.run.app/execute
+
+schedules:
+  # Date Compliance - runs all 3 jobs in sequence
+  - name: sentinel-date-compliance-all
+    schedule: "0 6 * * *"  # Daily at 6:00 AM
+    job: date_compliance_all
+    params:
+      limit: 50
+    enabled: true
+    description: "Daily date compliance check (AR-HOLD + SO sync + PO sync)"
+
+  # Individual jobs (for manual scheduling or different frequencies)
+
+  # AR-HOLD violations - high priority, run more frequently
+  - name: sentinel-ar-hold-violations
+    schedule: "0 */6 * * *"  # Every 6 hours
+    job: check_ar_hold_violations
+    params:
+      limit: 100
+    enabled: false  # Disabled - covered by date_compliance_all
+    description: "Check AR-HOLD violations for blocked partners"
+
+  # SO Picking date sync
+  - name: sentinel-so-picking-sync
+    schedule: "30 6 * * *"  # Daily at 6:30 AM
+    job: sync_so_picking_dates
+    params:
+      limit: 100
+      include_bq_query: true
+    enabled: false  # Disabled - covered by date_compliance_all
+    description: "Sync SO picking dates to commitment_date"
+
+  # PO Picking date sync
+  - name: sentinel-po-picking-sync
+    schedule: "0 7 * * *"  # Daily at 7:00 AM
+    job: sync_po_picking_dates
+    params:
+      limit: 100
+    enabled: false  # Disabled - covered by date_compliance_all
+    description: "Sync PO picking dates to date_planned"
+
+  # Clean empty draft transfers
+  - name: sentinel-clean-empty-drafts
+    schedule: "0 5 * * *"  # Daily at 5:00 AM
+    job: clean_empty_draft_transfers
+    params:
+      limit: 200
+    enabled: true
+    description: "Cancel empty draft pickings"
+
+  # Complete shipping-only orders
+  - name: sentinel-complete-shipping
+    schedule: "0 8 * * *"  # Daily at 8:00 AM
+    job: complete_shipping_only_orders
+    params:
+      limit: 100
+    enabled: true
+    description: "Mark shipping lines as delivered when order is shipped"
+
+  # Adjust closed order quantities
+  - name: sentinel-adjust-closed-qtys
+    schedule: "0 9 * * *"  # Daily at 9:00 AM
+    job: adjust_closed_order_quantities
+    params:
+      limit: 50
+    enabled: true
+    description: "Cap delivered qty to ordered qty on closed orders"
+
+  # Clean old orders (weekly)
+  - name: sentinel-clean-old-orders
+    schedule: "0 3 * * 0"  # Sundays at 3:00 AM
+    job: clean_old_orders
+    params:
+      days: 90
+      limit: 100
+    enabled: false  # Disabled by default - destructive
+    description: "Clean old draft/cancelled orders"
