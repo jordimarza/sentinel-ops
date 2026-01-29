@@ -43,7 +43,9 @@ class SyncSOPickingDatesJob(BaseJob):
     - BQ query (auto-discovery) or explicit order_ids/picking_ids parameter
     """
 
-    # BQ query to find SO picking date mismatches
+    # BQ query to find SO picking date mismatches (normal pickings only)
+    # Returns are excluded: they use scheduled_date=today+15, not commitment_date
+    # Returns should be discovered via order_ids from check_ar_hold_violations
     BQ_QUERY = """
     SELECT
         so.id AS order_id,
@@ -57,6 +59,7 @@ class SyncSOPickingDatesJob(BaseJob):
     WHERE sp.state NOT IN ('done', 'cancel')
       AND so.commitment_date IS NOT NULL
       AND (DATE(sp.scheduled_date) != DATE(so.commitment_date))
+      AND NOT LOWER(COALESCE(sp.origin, '')) LIKE 'return of%'
     """
 
     def run(

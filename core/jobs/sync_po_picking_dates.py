@@ -665,7 +665,7 @@ if __name__ == "__main__":
     print("=" * 70)
     print("\nUsage:")
     print("-" * 70)
-    print("\n# Simple: By PO IDs (full sync - header + moves)")
+    print("\n# By PO IDs")
     print("python main.py run sync_po_picking_dates --dry-run po_ids=100,101")
     print("\n# With line-level sync (each move gets its PO line date)")
     print("python main.py run sync_po_picking_dates --dry-run po_ids=100 sync_line_level=True")
