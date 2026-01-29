@@ -43,7 +43,6 @@ class DateComplianceAllJob(BaseJob):
         limit: Optional[int] = None,
         extension_days: int = 15,
         include_bq_query: bool = True,
-        sync_line_level: bool = False,
         skip_ar_hold: bool = False,
         skip_so_sync: bool = False,
         skip_po_sync: bool = False,
@@ -58,7 +57,6 @@ class DateComplianceAllJob(BaseJob):
             limit: Maximum records per job
             extension_days: Days to extend commitment_date in Job 1
             include_bq_query: Include BQ query in Job 2 for additional mismatches
-            sync_line_level: Enable line-level sync in Job 3
             skip_ar_hold: Skip Job 1 (AR-HOLD violations)
             skip_so_sync: Skip Job 2 (SO picking sync)
             skip_po_sync: Skip Job 3 (PO picking sync)
@@ -73,7 +71,6 @@ class DateComplianceAllJob(BaseJob):
             "limit": limit,
             "extension_days": extension_days,
             "include_bq_query": include_bq_query,
-            "sync_line_level": sync_line_level,
             "skip_ar_hold": skip_ar_hold,
             "skip_so_sync": skip_so_sync,
             "skip_po_sync": skip_po_sync,
@@ -102,8 +99,12 @@ class DateComplianceAllJob(BaseJob):
                 ar_hold_order_ids = r1.data.get("processed_order_ids", [])
 
                 self.log.info(
-                    f"Job 1 complete: {r1.records_updated} orders processed, "
-                    f"{len(ar_hold_order_ids)} IDs to pass to Job 2"
+                    f"Job 1 complete: "
+                    f"checked={r1.kpis.get('orders_checked', r1.records_checked)}, "
+                    f"updated={r1.records_updated}, "
+                    f"pickings={r1.kpis.get('pickings_updated', 0)}, "
+                    f"moves={r1.kpis.get('moves_updated', 0)}, "
+                    f"passing {len(ar_hold_order_ids)} IDs to Job 2"
                 )
 
             except Exception as e:
@@ -133,7 +134,11 @@ class DateComplianceAllJob(BaseJob):
                 self._merge_result(result, r2, "so_sync")
 
                 self.log.info(
-                    f"Job 2 complete: {r2.kpis.get('pickings_updated', 0)} pickings updated"
+                    f"Job 2 complete: "
+                    f"checked={r2.kpis.get('pickings_checked', r2.records_checked)}, "
+                    f"updated={r2.kpis.get('pickings_updated', 0)}, "
+                    f"moves={r2.kpis.get('moves_updated', 0)}, "
+                    f"skipped={r2.records_skipped}"
                 )
 
             except Exception as e:
@@ -152,14 +157,17 @@ class DateComplianceAllJob(BaseJob):
                 r3 = job3.execute(
                     po_ids=po_ids or None,
                     limit=limit,
-                    sync_line_level=sync_line_level,
                 )
 
                 # Merge results
                 self._merge_result(result, r3, "po_sync")
 
                 self.log.info(
-                    f"Job 3 complete: {r3.kpis.get('pickings_updated', 0)} pickings updated"
+                    f"Job 3 complete: "
+                    f"pos_checked={r3.kpis.get('pos_checked', r3.records_checked)}, "
+                    f"pickings={r3.kpis.get('pickings_updated', 0)}, "
+                    f"moves={r3.kpis.get('moves_updated', 0)}, "
+                    f"skipped={r3.records_skipped}"
                 )
 
             except Exception as e:
@@ -230,8 +238,8 @@ if __name__ == "__main__":
     print("python main.py run date_compliance_all --dry-run order_ids=123 skip_ar_hold=True")
     print("\n# Skip PO sync")
     print("python main.py run date_compliance_all --dry-run order_ids=123 skip_po_sync=True")
-    print("\n# With line-level PO sync")
-    print("python main.py run date_compliance_all --dry-run order_ids=123 po_ids=789 sync_line_level=True")
+    print("\n# Run with explicit PO IDs")
+    print("python main.py run date_compliance_all --dry-run order_ids=123 po_ids=789")
     print("\n# Custom extension days for AR-HOLD")
     print("python main.py run date_compliance_all --dry-run order_ids=123 extension_days=30")
     print("\n# With limit")
