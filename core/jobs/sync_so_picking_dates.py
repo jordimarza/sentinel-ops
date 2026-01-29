@@ -44,6 +44,7 @@ class SyncSOPickingDatesJob(BaseJob):
     """
 
     # BQ query to find SO picking date mismatches (normal pickings only)
+    # Checks both scheduled_date vs commitment_date AND date_deadline vs ah_cancel_date
     # Returns are excluded: they use scheduled_date=today+15, not commitment_date
     # Returns should be discovered via order_ids from check_ar_hold_violations
     BQ_QUERY = """
@@ -51,14 +52,19 @@ class SyncSOPickingDatesJob(BaseJob):
         so.id AS order_id,
         so.name AS order_name,
         so.commitment_date,
+        so.x_studio_cancel_date AS ah_cancel_date,
         sp.id AS picking_id,
         sp.name AS picking_name,
-        sp.scheduled_date
+        sp.scheduled_date,
+        sp.date_deadline
     FROM `alohas-analytics.prod_staging.stg_odoo__sales` so
     JOIN `alohas-analytics.prod_staging.stg_bq_odoo__stock_picking` sp ON sp.sale_id = so.id
     WHERE sp.state NOT IN ('done', 'cancel')
       AND so.commitment_date IS NOT NULL
-      AND (DATE(sp.scheduled_date) != DATE(so.commitment_date))
+      AND (
+        DATE(sp.scheduled_date) != DATE(so.commitment_date)
+        OR DATE(sp.date_deadline) != DATE(COALESCE(so.x_studio_cancel_date, so.commitment_date))
+      )
       AND NOT LOWER(COALESCE(sp.origin, '')) LIKE 'return of%'
     """
 
