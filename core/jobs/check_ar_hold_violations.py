@@ -8,7 +8,7 @@ violations with AR-HOLD:N tags.
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from core.jobs.registry import register_job
 from core.jobs.base import BaseJob
@@ -109,19 +109,22 @@ class CheckArHoldViolationsJob(BaseJob):
         if order_ids is not None and not isinstance(order_ids, list):
             order_ids = [order_ids]
 
+        bq_total = 0
+
         # Discover from BQ if no explicit order_ids
         if not order_ids:
             self.log.info("No order_ids provided - discovering from BigQuery")
-            order_ids, bq_error = self._discover_from_bq(limit)
+            order_ids, bq_error = self._discover_from_bq()
+            bq_total = len(order_ids) if order_ids else 0
             if bq_error:
                 result.errors.append(bq_error)
             if not order_ids:
                 self.log.info("No AR-HOLD violation candidates found")
-                result.kpis = self._build_kpis(result, 0, 0, 0, {})
+                result.kpis = self._build_kpis(result, 0, 0, 0, {}, bq_total)
                 result.complete()
                 return result
 
-        # Apply limit if specified
+        # Apply limit if specified (after tracking bq_total)
         if limit and len(order_ids) > limit:
             order_ids = order_ids[:limit]
 
@@ -341,13 +344,13 @@ class CheckArHoldViolationsJob(BaseJob):
 
         # Set KPIs
         result.kpis = self._build_kpis(
-            result, orders_processed, pickings_updated, moves_updated, skip_reasons
+            result, orders_processed, pickings_updated, moves_updated, skip_reasons, bq_total
         )
 
         result.complete()
         return result
 
-    def _discover_from_bq(self, limit: Optional[int]) -> tuple[list[int], Optional[str]]:
+    def _discover_from_bq(self) -> tuple[list[int], Optional[str]]:
         """
         Discover AR-HOLD violation candidates from BigQuery.
 
@@ -355,8 +358,6 @@ class CheckArHoldViolationsJob(BaseJob):
             Tuple of (order_ids list, error message or None)
         """
         query = self.BQ_QUERY
-        if limit:
-            query += f"\nLIMIT {limit}"
 
         try:
             rows = self.bq.query(query)
@@ -375,9 +376,10 @@ class CheckArHoldViolationsJob(BaseJob):
         pickings_updated: int,
         moves_updated: int,
         skip_reasons: dict[str, int],
-    ) -> dict:
+        bq_total: int = 0,
+    ) -> dict[str, Any]:
         """Build KPIs dict for the job result."""
-        kpis = {
+        kpis: dict[str, Any] = {
             "orders_checked": result.records_checked,
             "orders_processed": orders_processed,
             "orders_skipped": sum(skip_reasons.values()),
@@ -385,6 +387,8 @@ class CheckArHoldViolationsJob(BaseJob):
             "moves_updated": moves_updated,
             "exceptions": len(result.errors),
         }
+        if bq_total > 0:
+            kpis["bq_candidates_total"] = bq_total
         if skip_reasons:
             kpis["skip_reasons"] = skip_reasons
         return kpis

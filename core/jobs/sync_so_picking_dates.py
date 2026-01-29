@@ -7,7 +7,7 @@ the parent sale.order commitment_date.
 
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from core.jobs.registry import register_job
 from core.jobs.base import BaseJob
@@ -95,18 +95,23 @@ class SyncSOPickingDatesJob(BaseJob):
         pickings_updated = 0
         moves_updated = 0
         skip_reasons: dict[str, int] = {}
+        bq_total = 0
 
         # Discover from BQ if no explicit IDs provided
         if not order_ids and not picking_ids:
             self.log.info("No explicit IDs provided - discovering from BigQuery")
-            picking_ids, bq_error = self._discover_from_bq(limit)
+            picking_ids, bq_error = self._discover_from_bq()
+            bq_total = len(picking_ids) if picking_ids else 0
             if bq_error:
                 result.errors.append(bq_error)
             if not picking_ids:
                 self.log.info("No SO picking date mismatches found")
-                result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated, {})
+                result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated, {}, bq_total)
                 result.complete()
                 return result
+            # Apply limit after getting total
+            if limit and len(picking_ids) > limit:
+                picking_ids = picking_ids[:limit]
 
         # Collect pickings to process
         pickings_to_process = []
@@ -238,7 +243,7 @@ class SyncSOPickingDatesJob(BaseJob):
 
         if not pickings_to_process:
             self.log.info("No pickings to process")
-            result.kpis = self._build_kpis(result, 0, 0, 0, {})
+            result.kpis = self._build_kpis(result, 0, 0, 0, {}, bq_total)
             result.complete()
             return result
 
@@ -414,7 +419,7 @@ class SyncSOPickingDatesJob(BaseJob):
                 result.errors.append(f"Picking {picking_name}: {e}")
 
         # Set KPIs
-        result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated, skip_reasons)
+        result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated, skip_reasons, bq_total)
 
         result.complete()
         return result
@@ -439,7 +444,7 @@ class SyncSOPickingDatesJob(BaseJob):
             except ValueError:
                 return None
 
-    def _discover_from_bq(self, limit: Optional[int]) -> tuple[list[int], Optional[str]]:
+    def _discover_from_bq(self) -> tuple[list[int], Optional[str]]:
         """
         Discover SO picking date mismatches from BigQuery.
 
@@ -447,8 +452,6 @@ class SyncSOPickingDatesJob(BaseJob):
             Tuple of (picking_ids list, error message or None)
         """
         query = self.BQ_QUERY
-        if limit:
-            query += f"\nLIMIT {limit}"
 
         try:
             rows = self.bq.query(query)
@@ -467,15 +470,18 @@ class SyncSOPickingDatesJob(BaseJob):
         pickings_updated: int,
         moves_updated: int,
         skip_reasons: dict[str, int],
+        bq_total: int = 0,
     ) -> dict:
         """Build KPIs dict for the job result."""
-        kpis = {
+        kpis: dict[str, Any] = {
             "pickings_checked": pickings_checked,
             "pickings_updated": pickings_updated,
             "pickings_skipped": sum(skip_reasons.values()),
             "moves_updated": moves_updated,
             "exceptions": len(result.errors),
         }
+        if bq_total > 0:
+            kpis["bq_candidates_total"] = bq_total
         if skip_reasons:
             kpis["skip_reasons"] = skip_reasons
         return kpis

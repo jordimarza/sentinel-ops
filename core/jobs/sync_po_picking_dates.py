@@ -105,20 +105,22 @@ class SyncPOPickingDatesJob(BaseJob):
         })
 
         # Discover from BQ if no explicit inputs provided
+        bq_total = 0
         if not candidates and not po_ids and not picking_ids:
             self.log.info("No explicit inputs provided - discovering from BigQuery")
-            candidates, bq_error = self._discover_from_bq(limit)
+            candidates, bq_error = self._discover_from_bq()
+            bq_total = len(candidates) if candidates else 0
             if bq_error:
                 result.errors.append(bq_error)
             if not candidates:
                 self.log.info("No PO picking date mismatches found")
-                result.kpis = self._build_kpis(result, 0, 0, 0, 0, {})
+                result.kpis = self._build_kpis(result, 0, 0, 0, {}, bq_total)
                 result.complete()
                 return result
 
         # Route to appropriate handler based on input
         if candidates:
-            return self._process_candidates(result, candidates, limit)
+            return self._process_candidates(result, candidates, limit, bq_total)
         else:
             return self._process_simple(result, po_ids, picking_ids, limit)
 
@@ -127,6 +129,7 @@ class SyncPOPickingDatesJob(BaseJob):
         result: JobResult,
         candidates: list[dict[str, Any]],
         limit: Optional[int],
+        bq_total: int = 0,
     ) -> JobResult:
         """
         Process candidates from BQ query with granular update flags.
@@ -269,6 +272,7 @@ class SyncPOPickingDatesJob(BaseJob):
         result.records_checked = po_count
         result.records_skipped = sum(skip_reasons.values())
         kpis: dict[str, Any] = {
+            "bq_candidates_total": bq_total,
             "pos_checked": po_count,
             "pickings_updated": pickings_updated,
             "moves_updated": moves_updated,
@@ -515,7 +519,7 @@ class SyncPOPickingDatesJob(BaseJob):
 
         if not pos_to_process:
             self.log.info("No purchase orders to process")
-            result.kpis = self._build_kpis(result, 0, 0, 0, 0, {})
+            result.kpis = self._build_kpis(result, 0, 0, 0, {})
             result.complete()
             return result
 
@@ -637,15 +641,18 @@ class SyncPOPickingDatesJob(BaseJob):
         pickings_updated: int,
         moves_updated: int,
         skip_reasons: dict[str, int],
+        bq_total: int = 0,
     ) -> dict:
         """Build KPIs dict for the job result."""
-        kpis = {
+        kpis: dict[str, Any] = {
             "pos_checked": pos_checked,
             "pickings_updated": pickings_updated,
             "pos_skipped": sum(skip_reasons.values()),
             "moves_updated": moves_updated,
             "exceptions": len(result.errors),
         }
+        if bq_total > 0:
+            kpis["bq_candidates_total"] = bq_total
         if skip_reasons:
             kpis["skip_reasons"] = skip_reasons
         return kpis
