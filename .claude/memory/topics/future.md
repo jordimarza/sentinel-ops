@@ -85,12 +85,49 @@ async def call_tool(name: str, arguments: dict):
 
 | Job | Description | Priority |
 |-----|-------------|----------|
+| `remediate_orders_to_invoice` | Handle stuck "to invoice" orders | **High** |
 | `cap_pending_move_quantities` | Ensure delivered + pending <= ordered | **High** |
 | `cancel_orphaned_pickings` | Cancel pickings on closed orders | **High** |
 | `monitor_inventory` | Alert on low stock levels | Medium |
 | `cleanup_stalled_pickings` | Handle stuck transfers | Medium |
 | `reconcile_invoices` | Match payments to invoices | Medium |
 | `archive_old_quotations` | Clean up expired quotes | Low |
+
+---
+
+## Remediate Orders to Invoice Job
+
+**Status**: Planned
+**Priority**: High
+
+**Problem**: Orders stuck in "to invoice" status that need remediation based on different scenarios.
+
+**Scenarios to investigate**:
+
+| Scenario | Condition | Potential Action |
+|----------|-----------|------------------|
+| Return already processed | Return picking done, original order still "to invoice" | Send quantities to virtual location? |
+| B2B older orders | B2B order, older than X days | Raise intervention task |
+| Partial delivery | Some items delivered, some pending | TBD - may need manual review |
+| Zero-value order | Order total = 0 (discounts/credits) | Auto-invoice? |
+| Other | TBD | TBD |
+
+**Discovery needed**:
+- What makes an order "to invoice" in Odoo? (`invoice_status = 'to invoice'`?)
+- Common root causes from historical data
+- BQ query to find candidates by scenario type
+- What fields indicate a return was processed?
+
+**Questions**:
+1. What does "send quantities to virtual location" mean exactly?
+2. Which B2B partners/order types need intervention vs auto-remediation?
+3. Are there orders that should stay "to invoice" indefinitely?
+4. How to detect if a return was fully processed?
+
+**Implementation approach**:
+- Likely needs scenario-based routing (detect scenario → apply specific action)
+- Integration with intervention system for cases needing human review
+- BQ-first discovery with Odoo verification
 
 ---
 
@@ -254,4 +291,4 @@ Then: action_cancel()
 
 ---
 
-**Last updated**: 2025-01-24
+**Last updated**: 2025-01-29
