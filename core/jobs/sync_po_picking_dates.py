@@ -44,11 +44,16 @@ class SyncPOPickingDatesJob(BaseJob):
     """
 
     # BQ query to find PO picking date mismatches
+    # Checks both scheduled_date and date_deadline vs po.date_planned
+    # Handles NULL date_deadline as needing update
     BQ_QUERY = """
     WITH picking_base AS (
         SELECT po.id AS po_id, po.name AS po_name, po.date_planned AS po_date_planned,
-               sp.id AS picking_id, sp.name AS picking_name, sp.scheduled_date,
-               DATE(sp.scheduled_date) != DATE(po.date_planned) AS needs_header_update
+               sp.id AS picking_id, sp.name AS picking_name,
+               sp.scheduled_date, sp.date_deadline,
+               (DATE(sp.scheduled_date) != DATE(po.date_planned)
+                OR sp.date_deadline IS NULL
+                OR DATE(sp.date_deadline) != DATE(po.date_planned)) AS needs_header_update
         FROM `alohas-analytics.prod_staging.stg_odoo__purchase_order` po
         JOIN `alohas-analytics.prod_staging.stg_bq_odoo__stock_picking` sp
             ON sp.origin = po.name
