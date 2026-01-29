@@ -96,25 +96,26 @@ class SyncSOPickingDatesJob(BaseJob):
         moves_updated = 0
         skip_reasons: dict[str, int] = {}
         bq_total = 0
+        bq_picking_ids: list[int] = []
 
-        # Discover from BQ if no explicit IDs provided
-        if not order_ids and not picking_ids:
-            self.log.info("No explicit IDs provided - discovering from BigQuery")
-            picking_ids, bq_error = self._discover_from_bq()
-            bq_total = len(picking_ids) if picking_ids else 0
+        # Query BQ if requested (or if no explicit IDs provided)
+        if include_bq_query or (not order_ids and not picking_ids):
+            self.log.info("Querying BigQuery for SO picking date mismatches")
+            bq_picking_ids, bq_error = self._discover_from_bq()
+            bq_total = len(bq_picking_ids) if bq_picking_ids else 0
             if bq_error:
                 result.errors.append(bq_error)
-            if not picking_ids:
-                self.log.info("No SO picking date mismatches found")
-                result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated, {}, bq_total)
-                result.complete()
-                return result
-            # Apply limit after getting total
-            if limit and len(picking_ids) > limit:
-                picking_ids = picking_ids[:limit]
+
+        # If no explicit IDs and BQ returned nothing, exit early
+        if not order_ids and not picking_ids and not bq_picking_ids:
+            self.log.info("No SO picking date mismatches found")
+            result.kpis = self._build_kpis(result, pickings_checked, pickings_updated, moves_updated, {}, bq_total)
+            result.complete()
+            return result
 
         # Collect pickings to process
-        pickings_to_process = []
+        pickings_to_process: list[dict] = []
+        seen_picking_ids: set[int] = set()
 
         # Process from explicit order_ids
         if order_ids:
@@ -151,10 +152,14 @@ class SyncSOPickingDatesJob(BaseJob):
                     pickings = date_ops.get_open_pickings_for_order(order_id)
 
                     for picking in pickings:
+                        pid = picking["id"]
+                        if pid in seen_picking_ids:
+                            continue
+                        seen_picking_ids.add(pid)
                         origin = picking.get("origin") or ""
                         is_return = self._is_return_picking(origin)
                         pickings_to_process.append({
-                            "picking_id": picking["id"],
+                            "picking_id": pid,
                             "picking_name": picking.get("name"),
                             "old_scheduled": picking.get("scheduled_date"),
                             "old_deadline": picking.get("date_deadline"),
@@ -174,14 +179,15 @@ class SyncSOPickingDatesJob(BaseJob):
                         error=str(e),
                     )
 
-        # Process from explicit picking_ids
+        # Process from explicit picking_ids (dedup against order-derived)
         if picking_ids:
+            new_picking_ids = [pid for pid in picking_ids if pid not in seen_picking_ids]
             self.log.info(
-                f"Processing {len(picking_ids)} explicit picking IDs",
-                data={"picking_ids": picking_ids},
+                f"Processing {len(new_picking_ids)} explicit picking IDs (after dedup)",
+                data={"picking_ids": new_picking_ids},
             )
 
-            for picking_id in picking_ids:
+            for picking_id in new_picking_ids:
                 try:
                     # Get picking with related order info
                     pickings = self.odoo.search_read(
@@ -215,6 +221,7 @@ class SyncSOPickingDatesJob(BaseJob):
                     commitment_date = self._parse_date(orders[0]["commitment_date"])
                     cancel_date = self._parse_date(orders[0].get("ah_cancel_date"))
 
+                    seen_picking_ids.add(picking_id)
                     origin = picking.get("origin") or ""
                     is_return = self._is_return_picking(origin)
                     pickings_to_process.append({
@@ -238,8 +245,73 @@ class SyncSOPickingDatesJob(BaseJob):
                         error=str(e),
                     )
 
-        # TODO: Add BQ query support when include_bq_query=True
-        # This would query for additional pickings with date mismatches
+        # Add BQ-discovered pickings (dedup against already seen)
+        if bq_picking_ids:
+            new_from_bq = [pid for pid in bq_picking_ids if pid not in seen_picking_ids]
+            if new_from_bq:
+                # Apply limit to BQ pickings if we have room
+                pickings_from_orders = len(pickings_to_process)
+                if limit and pickings_from_orders + len(new_from_bq) > limit:
+                    remaining = max(0, limit - pickings_from_orders)
+                    new_from_bq = new_from_bq[:remaining]
+
+                self.log.info(f"Adding {len(new_from_bq)} pickings from BQ (after dedup)")
+
+                for picking_id in new_from_bq:
+                    try:
+                        pickings = self.odoo.search_read(
+                            "stock.picking",
+                            [("id", "=", picking_id)],
+                            fields=["id", "name", "sale_id", "scheduled_date", "date_deadline", "origin"],
+                        )
+
+                        if not pickings:
+                            continue
+
+                        picking = pickings[0]
+                        sale_id = picking.get("sale_id")
+
+                        if not sale_id:
+                            continue
+
+                        order_id = sale_id[0]
+                        order_name = sale_id[1] if len(sale_id) > 1 else f"order-{order_id}"
+
+                        orders = self.odoo.search_read(
+                            "sale.order",
+                            [("id", "=", order_id)],
+                            fields=["commitment_date", "ah_cancel_date"],
+                        )
+
+                        if not orders or not orders[0].get("commitment_date"):
+                            continue
+
+                        commitment_date = self._parse_date(orders[0]["commitment_date"])
+                        cancel_date = self._parse_date(orders[0].get("ah_cancel_date"))
+
+                        seen_picking_ids.add(picking_id)
+                        origin = picking.get("origin") or ""
+                        is_return = self._is_return_picking(origin)
+                        pickings_to_process.append({
+                            "picking_id": picking_id,
+                            "picking_name": picking.get("name"),
+                            "old_scheduled": picking.get("scheduled_date"),
+                            "old_deadline": picking.get("date_deadline"),
+                            "target_date": commitment_date,
+                            "cancel_date": cancel_date,
+                            "reference_field": "commitment_date",
+                            "parent_model": "sale.order",
+                            "parent_id": order_id,
+                            "parent_name": order_name,
+                            "is_return": is_return,
+                        })
+
+                    except Exception as e:
+                        self.log.error(
+                            f"Error processing BQ picking {picking_id}",
+                            record_id=picking_id,
+                            error=str(e),
+                        )
 
         if not pickings_to_process:
             self.log.info("No pickings to process")
