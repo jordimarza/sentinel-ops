@@ -171,4 +171,18 @@ Benefits:
 
 ---
 
-**Last updated**: 2025-01-24
+## Deployment Pattern
+
+**CI/CD with GitHub Actions** - push to `main` triggers automatic deployment.
+
+```bash
+# Just push - no manual deploy needed
+git push origin main
+# Cloud Function updates automatically
+```
+
+No need to run `gcloud functions deploy` or scripts manually.
+
+---
+
+**Last updated**: 2025-01-30
