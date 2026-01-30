@@ -213,6 +213,13 @@ Per-Job Examples (CLI + curl):
     curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
       -d '{{"job":"clean_empty_draft_transfers","dry_run":true,"params":{{"limit":10}}}}'
 
+  create_documents (validates then creates sale.order/stock.picking from JSON):
+    python main.py run create_documents --dry-run file=/path/to/import.json
+    python main.py run create_documents file=/path/to/import.json
+    python main.py run create_documents --dry-run 'json_input={{"metadata":{{"source":"test"}},"documents":[...]}}'
+    curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
+      -d '{{"job":"create_documents","dry_run":true,"params":{{"file":"/path/to/import.json"}}}}'
+
 General:
     python main.py list                              # List all jobs
     curl {base_url}/health                           # Health check
