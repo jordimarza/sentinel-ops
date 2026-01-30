@@ -332,7 +332,7 @@ class DocumentCreationOperations(BaseOperation):
         for line in lines:
             line_row = line.get("row_number", doc_row)
             product_id = line.get("product_id")
-            product_ref = line.get("product_ref")
+            product_ref = line.get("product_ref") or line.get("product_sku")  # Accept both
             product_name = line.get("product_name")
 
             if product_id or product_ref or product_name:
@@ -575,7 +575,7 @@ class DocumentCreationOperations(BaseOperation):
                 # Resolve product
                 product_result = self.resolve_product(
                     line.get("product_id"),
-                    line.get("product_ref"),
+                    line.get("product_ref") or line.get("product_sku"),  # Accept both
                     line.get("product_name"),
                 )
                 if not product_result.success:
@@ -791,7 +791,7 @@ class DocumentCreationOperations(BaseOperation):
                 # Resolve product
                 product_result = self.resolve_product(
                     line.get("product_id"),
-                    line.get("product_ref"),
+                    line.get("product_ref") or line.get("product_sku"),  # Accept both
                     line.get("product_name"),
                 )
                 if not product_result.success:
@@ -967,7 +967,7 @@ class DocumentCreationOperations(BaseOperation):
                 # Resolve product
                 product_result = self.resolve_product(
                     line.get("product_id"),
-                    line.get("product_ref"),
+                    line.get("product_ref") or line.get("product_sku"),  # Accept both
                     line.get("product_name"),
                 )
                 if not product_result.success:
