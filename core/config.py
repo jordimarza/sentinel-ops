@@ -18,11 +18,17 @@ class Settings:
 
     Priority: Secret Manager > Environment Variable > Default
     """
-    # Odoo connection
+    # Odoo connection (production)
     odoo_url: str = ""
     odoo_db: str = ""
     odoo_username: str = ""
     odoo_password: str = ""
+
+    # Odoo development instance (for testing)
+    odoo_dev_url: str = ""
+    odoo_dev_db: str = ""
+    odoo_dev_username: str = ""  # Falls back to odoo_username if empty
+    odoo_dev_password: str = ""  # Falls back to odoo_password if empty
 
     # BigQuery
     bq_project: str = ""
@@ -49,6 +55,12 @@ class Settings:
             odoo_db=os.getenv("ODOO_DB", ""),
             odoo_username=os.getenv("ODOO_USERNAME", ""),
             odoo_password=os.getenv("ODOO_PASSWORD", ""),
+            # Dev Odoo (same credentials by default)
+            odoo_dev_url=os.getenv("ODOO_DEV_URL", ""),
+            odoo_dev_db=os.getenv("ODOO_DEV_DB", ""),
+            odoo_dev_username=os.getenv("ODOO_DEV_USERNAME", ""),
+            odoo_dev_password=os.getenv("ODOO_DEV_PASSWORD", ""),
+            # BigQuery
             bq_project=os.getenv("BQ_PROJECT", os.getenv("GCP_PROJECT", "")),
             bq_dataset=os.getenv("BQ_DATASET", "sentinel_ops"),
             bq_audit_table=os.getenv("BQ_AUDIT_TABLE", "audit_log"),
@@ -95,6 +107,12 @@ class Settings:
             odoo_db=get_secret("odoo-db"),
             odoo_username=get_secret("odoo-username"),
             odoo_password=get_secret("odoo-password"),
+            # Dev Odoo (optional, for testing with use_dev=true)
+            odoo_dev_url=get_secret("odoo-dev-url"),
+            odoo_dev_db=get_secret("odoo-dev-db"),
+            odoo_dev_username=get_secret("odoo-dev-username"),  # Falls back to odoo_username
+            odoo_dev_password=get_secret("odoo-dev-password"),  # Falls back to odoo_password
+            # BigQuery
             bq_project=get_secret("bq-project", os.getenv("GCP_PROJECT", "")),
             bq_dataset=get_secret("bq-dataset", "sentinel_ops"),
             bq_audit_table=get_secret("bq-audit-table", "audit_log"),
@@ -109,6 +127,24 @@ class Settings:
     def is_production(self) -> bool:
         """Check if running in production environment."""
         return self.environment.lower() == "production"
+
+    def get_dev_odoo_config(self) -> dict:
+        """
+        Get development Odoo configuration.
+
+        Returns dict with url, db, username, password.
+        Username/password fall back to production credentials if not set.
+        """
+        return {
+            "url": self.odoo_dev_url,
+            "db": self.odoo_dev_db,
+            "username": self.odoo_dev_username or self.odoo_username,
+            "password": self.odoo_dev_password or self.odoo_password,
+        }
+
+    def is_dev_odoo_configured(self) -> bool:
+        """Check if development Odoo is properly configured."""
+        return bool(self.odoo_dev_url and self.odoo_dev_db)
 
     # Placeholder values that indicate unconfigured settings
     PLACEHOLDER_VALUES = {
