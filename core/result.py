@@ -264,7 +264,7 @@ class JobResult:
 
     def to_dict(self) -> dict:
         """Convert to dict for logging/serialization."""
-        return {
+        result = {
             "status": self.status.value,
             "job_name": self.job_name,
             "started_at": self.started_at.isoformat(),
@@ -278,6 +278,10 @@ class JobResult:
             "dry_run": self.dry_run,
             "kpis": self.kpis,
         }
+        # Include result_data if present (validation errors, created docs, etc.)
+        if self.result_data:
+            result["result_data"] = self.result_data
+        return result
 
     def to_kpi_dict(self, odoo_url: str = "") -> dict:
         """
