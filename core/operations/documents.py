@@ -77,7 +77,7 @@ class DocumentCreationOperations(BaseOperation):
     PICKING_TYPE_MODEL = "stock.picking.type"
     LOCATION_MODEL = "stock.location"
     PAYMENT_TERM_MODEL = "account.payment.term"
-    TAG_MODEL = "crm.tag"
+    TAG_MODEL = "ah_order_tags"  # ALOHAS custom tag model
     SO_MODEL = "sale.order"
     SO_LINE_MODEL = "sale.order.line"
     PICKING_MODEL = "stock.picking"
@@ -624,12 +624,12 @@ class DocumentCreationOperations(BaseOperation):
 
                 self.odoo.create(self.SO_LINE_MODEL, line_vals)
 
-            # Add tags if specified
+            # Add tags if specified (using ALOHAS ah_ops_status_ids field)
             tags = header.get("tags", [])
             for tag_name in tags:
                 tag_id = self._ensure_tag(tag_name)
                 self.odoo.write(
-                    self.SO_MODEL, [order_id], {"tag_ids": [(4, tag_id)]}
+                    self.SO_MODEL, [order_id], {"ah_ops_status_ids": [(4, tag_id)]}
                 )
 
             # Post creation message
@@ -836,6 +836,14 @@ class DocumentCreationOperations(BaseOperation):
                     move_vals[key] = value
 
                 self.odoo.create(self.MOVE_MODEL, move_vals)
+
+            # Add tags if specified (using ALOHAS ah_operation_tags_ids field)
+            tags = header.get("tags", [])
+            for tag_name in tags:
+                tag_id = self._ensure_tag(tag_name)
+                self.odoo.write(
+                    self.PICKING_MODEL, [picking_id], {"ah_operation_tags_ids": [(4, tag_id)]}
+                )
 
             # Post creation message
             self._post_creation_message(
