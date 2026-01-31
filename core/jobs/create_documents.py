@@ -284,13 +284,22 @@ class CreateDocumentsJob(BaseJob):
             result.add_operation(op_result)
 
             if op_result.success:
+                # Calculate total quantity from lines
+                total_quantity = sum(
+                    line.get("quantity", 0) for line in lines
+                )
+                # Get partner name from document metadata or header
+                partner_name = doc.get("_partner_name") or header.get("partner_name", "")
+
                 doc_record = {
                     "row_number": row_number,
                     "document_type": doc_type,
                     "record_id": op_result.record_id,
                     "record_name": op_result.record_name,
                     "odoo_url": _build_odoo_url(op_result.record_id, op_result.model, odoo_base_url),
-                    "lines_created": len(lines),
+                    "partner_name": partner_name,
+                    "lines_count": len(lines),
+                    "total_quantity": total_quantity,
                     "state": "draft",
                     "environment": "development" if use_dev else "production",
                 }
@@ -335,7 +344,7 @@ class CreateDocumentsJob(BaseJob):
             "documents_created": len(created_documents),
             "documents_confirmed": confirmed_count if confirm else None,
             "documents_failed": len(creation_errors),
-            "total_lines_created": sum(d["lines_created"] for d in created_documents),
+            "total_lines_created": sum(d["lines_count"] for d in created_documents),
             "confirm_requested": confirm,
         }
 
