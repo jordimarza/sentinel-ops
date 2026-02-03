@@ -1,9 +1,15 @@
 """
 Create Documents Job
 
-Creates Odoo documents (sale.order, stock.picking) from JSON input with full validation.
+Creates Odoo documents (sale.order, stock.picking) from JSON or TSV input with full validation.
+
+Supports:
+- JSON input (existing format)
+- TSV template input (new format with automatic grouping)
 """
 
+import csv
+import io
 import json
 import logging
 from pathlib import Path
@@ -103,17 +109,22 @@ class CreateDocumentsJob(BaseJob):
     def run(
         self,
         json_input: Optional[str] = None,
+        tsv_input: Optional[str] = None,
         file: Optional[str] = None,
         confirm: bool = False,
         use_dev: Optional[bool] = None,
+        default_picking_type_id: Optional[int] = None,
         **params,
     ) -> JobResult:
         """
-        Create documents from JSON input.
+        Create documents from JSON or TSV input.
 
         Args:
             json_input: JSON string with document data
-            file: Path to JSON file with document data
+            tsv_input: TSV string with template format (auto-grouped by partner+delivery)
+                       Columns: document_type, partner_name, delivery_address, product_sku,
+                                quantity, commitment_date, scheduled_date, notes
+            file: Path to JSON or TSV file with document data (detected by extension)
             confirm: If True, confirm documents after creation (draft → confirmed)
                      - sale.order: action_confirm() (quotation → sales order)
                      - stock.picking: action_assign() (reserve stock)
@@ -124,10 +135,48 @@ class CreateDocumentsJob(BaseJob):
                        - production → use production Odoo
                      - True: force dev Odoo
                      - False: force production Odoo
+            default_picking_type_id: Default picking type ID for stock.picking documents
+                                     when not specified in the input (required for TSV imports
+                                     with stock.picking documents)
 
         Returns:
             JobResult with created document IDs, names, and URLs or validation errors
+
+        TSV Template Format:
+            document_type   partner_name   delivery_address   product_sku   quantity   commitment_date   scheduled_date   notes
+            sale.order      Partner Inc    Delivery Addr      SKU123        10         2025-02-02
+            stock.picking   Partner Inc                       SKU456        5                            2025-02-02
+
+        TSV Column Reference:
+            Required:
+                - document_type: "sale.order", "stock.picking", or "purchase.order"
+                - partner_name: Partner name to search in Odoo (or partner_id for explicit ID)
+                - product_sku: Product reference/SKU (or product_ref, product_id)
+                - quantity: Line quantity
+
+            Optional - Delivery Address (choose one):
+                - delivery_address: Address name to search (must be child of partner)
+                - delivery_address_id: Explicit Odoo partner ID for shipping address
+                - (empty): Falls back to partner address as delivery address
+
+            Optional - Dates:
+                - commitment_date: For sale.order (YYYY-MM-DD)
+                - scheduled_date: For stock.picking (YYYY-MM-DD)
+
+            Optional - Other:
+                - notes: Line description/notes
+                - picking_type_id: For stock.picking (or use default_picking_type_id param)
+
+        Date Handling:
+            - For sale.order: uses commitment_date (falls back to scheduled_date if only that is provided)
+            - For stock.picking: uses scheduled_date (falls back to commitment_date if only that is provided)
+
+        Delivery Address Fallback:
+            - If delivery_address or delivery_address_id is provided: uses that address
+            - If neither is provided: uses the partner's own address as delivery address
         """
+        # Store default_picking_type_id for TSV parsing
+        self._default_picking_type_id = default_picking_type_id
         result = JobResult.from_context(self.ctx, parameters=params)
 
         # Determine which Odoo instance to use
@@ -163,10 +212,10 @@ class CreateDocumentsJob(BaseJob):
                 data={"url": settings.odoo_url},
             )
 
-        # Load input
-        data = self._load_input(json_input, file)
+        # Load input (supports JSON and TSV formats)
+        data = self._load_input(json_input, tsv_input, file, odoo_client)
         if not data:
-            result.errors.append("No input provided. Use json_input or file parameter.")
+            result.errors.append("No input provided. Use json_input, tsv_input, or file parameter.")
             result.complete()
             return result
 
@@ -354,18 +403,23 @@ class CreateDocumentsJob(BaseJob):
     def _load_input(
         self,
         json_input: Optional[str],
+        tsv_input: Optional[str],
         file: Optional[str],
+        odoo_client,
     ) -> Optional[dict]:
         """
-        Load input from JSON string or file.
+        Load input from JSON string, TSV string, or file.
 
         Args:
             json_input: JSON string
-            file: Path to JSON file
+            tsv_input: TSV string (template format)
+            file: Path to JSON or TSV file (detected by extension or content)
+            odoo_client: Odoo client for delivery address resolution in TSV mode
 
         Returns:
             Parsed dict or None if error
         """
+        # Direct JSON input
         if json_input:
             try:
                 return json.loads(json_input)
@@ -373,16 +427,243 @@ class CreateDocumentsJob(BaseJob):
                 self.log.error(f"Invalid JSON input: {e}")
                 return None
 
+        # Direct TSV input
+        if tsv_input:
+            return self._parse_tsv_input(tsv_input, odoo_client)
+
+        # File input
         if file:
             path = Path(file)
             if not path.exists():
                 self.log.error(f"File not found: {file}")
                 return None
-            try:
-                with open(path) as f:
-                    return json.load(f)
-            except json.JSONDecodeError as e:
-                self.log.error(f"Invalid JSON in file {file}: {e}")
-                return None
+
+            # Detect format from extension or content
+            content = path.read_text()
+
+            if path.suffix.lower() in (".tsv", ".txt", ".csv"):
+                # TSV/CSV file
+                return self._parse_tsv_input(content, odoo_client)
+            elif path.suffix.lower() == ".json":
+                # JSON file
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError as e:
+                    self.log.error(f"Invalid JSON in file {file}: {e}")
+                    return None
+            else:
+                # Try to auto-detect: if starts with { or [, it's JSON
+                stripped = content.strip()
+                if stripped.startswith("{") or stripped.startswith("["):
+                    try:
+                        return json.loads(content)
+                    except json.JSONDecodeError as e:
+                        self.log.error(f"Invalid JSON in file {file}: {e}")
+                        return None
+                else:
+                    # Assume TSV
+                    return self._parse_tsv_input(content, odoo_client)
 
         return None
+
+    def _parse_tsv_input(
+        self,
+        tsv_content: str,
+        odoo_client,
+    ) -> Optional[dict]:
+        """
+        Parse TSV template input and convert to document structure.
+
+        Groups rows by (document_type, partner_name, delivery_address) to form documents.
+        Each unique combination becomes a separate document, with rows becoming lines.
+
+        Handles date fallback logic:
+        - sale.order: prefers commitment_date, falls back to scheduled_date
+        - stock.picking: prefers scheduled_date, falls back to commitment_date
+
+        Args:
+            tsv_content: TSV string with header row
+            odoo_client: Odoo client for partner/address resolution
+
+        Returns:
+            Dict in standard document format or None if error
+        """
+        try:
+            # Parse TSV
+            reader = csv.DictReader(io.StringIO(tsv_content), delimiter="\t")
+
+            # Normalize column names (strip whitespace, lowercase for matching)
+            if reader.fieldnames:
+                # Create a mapping from normalized names to original
+                normalized_map = {}
+                for name in reader.fieldnames:
+                    normalized = name.strip().lower().replace(" ", "_")
+                    normalized_map[normalized] = name
+
+            # Group rows by (document_type, partner_name, delivery_address)
+            groups: dict[tuple[str, str, str], list[dict]] = {}
+            row_number = 1
+
+            for row in reader:
+                row_number += 1
+
+                # Normalize row keys
+                normalized_row = {}
+                for key, value in row.items():
+                    if key:
+                        norm_key = key.strip().lower().replace(" ", "_")
+                        normalized_row[norm_key] = (value or "").strip()
+
+                doc_type = normalized_row.get("document_type", "sale.order")
+                partner_name = normalized_row.get("partner_name", "")
+                delivery_address = normalized_row.get("delivery_address", normalized_row.get("delivery_adress", ""))
+                delivery_address_id = normalized_row.get("delivery_address_id", "")
+
+                # Skip empty rows
+                product_sku = normalized_row.get("product_sku", "")
+                if not product_sku:
+                    continue
+
+                # Create group key (delivery_address_id takes precedence over delivery_address)
+                delivery_key = delivery_address_id or delivery_address
+                group_key = (doc_type, partner_name, delivery_key)
+
+                if group_key not in groups:
+                    groups[group_key] = []
+
+                # Parse quantity
+                qty_str = normalized_row.get("quantity", "1")
+                try:
+                    quantity = float(qty_str) if qty_str else 1.0
+                except ValueError:
+                    quantity = 1.0
+
+                # Parse dates
+                commitment_date = normalized_row.get("commitment_date", "")
+                scheduled_date = normalized_row.get("scheduled_date", "")
+                notes = normalized_row.get("notes", "")
+
+                groups[group_key].append({
+                    "row_number": row_number,
+                    "product_sku": product_sku,
+                    "quantity": quantity,
+                    "commitment_date": commitment_date,
+                    "scheduled_date": scheduled_date,
+                    "notes": notes,
+                    "delivery_address_id": delivery_address_id,  # Explicit ID if provided
+                })
+
+            # Convert groups to documents
+            documents = []
+            ops = DocumentCreationOperations(odoo_client, self.ctx, self.log)
+
+            for (doc_type, partner_name, delivery_key), lines_data in groups.items():
+                # Get first line's dates and delivery info as document-level values
+                first_line = lines_data[0]
+                commitment_date = first_line.get("commitment_date", "")
+                scheduled_date = first_line.get("scheduled_date", "")
+                delivery_address_id = first_line.get("delivery_address_id", "")
+                # delivery_key is either delivery_address_id or delivery_address string
+                delivery_address = "" if delivery_address_id else delivery_key
+
+                # Smart date handling: use whichever date is provided
+                # For sale.order: prefer commitment_date
+                # For stock.picking: prefer scheduled_date
+                effective_commitment = commitment_date or scheduled_date
+                effective_scheduled = scheduled_date or commitment_date
+
+                # Build header
+                header = {
+                    "partner_name": partner_name,
+                }
+
+                # Apply dates based on document type
+                if doc_type == "sale.order":
+                    if effective_commitment:
+                        header["commitment_date"] = effective_commitment
+                elif doc_type == "stock.picking":
+                    if effective_scheduled:
+                        header["scheduled_date"] = effective_scheduled
+                    # Apply default picking type if set
+                    if hasattr(self, "_default_picking_type_id") and self._default_picking_type_id:
+                        header["picking_type_id"] = self._default_picking_type_id
+
+                # Resolve delivery address
+                # Priority: delivery_address_id > delivery_address > partner (fallback)
+                parent_partner_id = header.get("partner_id")
+                if not parent_partner_id and header.get("partner_name"):
+                    partner_result = ops.resolve_partner(partner_name=header["partner_name"])
+                    if partner_result.success:
+                        parent_partner_id = partner_result.record_id
+
+                if delivery_address_id:
+                    # Explicit delivery address ID provided - use directly
+                    try:
+                        header["partner_shipping_id"] = int(delivery_address_id)
+                        self.log.info(
+                            f"Using explicit delivery_address_id: {delivery_address_id}"
+                        )
+                    except ValueError:
+                        self.log.warning(
+                            f"Invalid delivery_address_id '{delivery_address_id}', must be numeric"
+                        )
+                elif delivery_address:
+                    # Resolve specific delivery address by name
+                    delivery_result = ops.resolve_delivery_address(
+                        delivery_address,
+                        parent_partner_id=parent_partner_id
+                    )
+                    if delivery_result.success:
+                        header["partner_shipping_id"] = delivery_result.record_id
+                        self.log.info(
+                            f"Resolved delivery address '{delivery_address}' → ID {delivery_result.record_id}"
+                        )
+                    else:
+                        self.log.warning(
+                            f"Could not resolve delivery address: {delivery_address}. "
+                            f"Error: {delivery_result.error}"
+                        )
+                elif parent_partner_id:
+                    # No delivery address provided - use partner as delivery address
+                    header["partner_shipping_id"] = parent_partner_id
+                    self.log.info(
+                        f"No delivery address provided, using partner ID {parent_partner_id} as shipping address"
+                    )
+
+                # Build lines
+                lines = []
+                for line_data in lines_data:
+                    line = {
+                        "row_number": line_data["row_number"],
+                        "product_sku": line_data["product_sku"],
+                        "quantity": line_data["quantity"],
+                    }
+                    if line_data.get("notes"):
+                        line["name"] = line_data["notes"]
+                    lines.append(line)
+
+                documents.append({
+                    "row_number": lines_data[0]["row_number"],
+                    "document_type": doc_type,
+                    "_partner_name": partner_name,  # Store for result display
+                    "header": header,
+                    "lines": lines,
+                })
+
+            self.log.info(
+                f"Parsed TSV: {row_number - 1} rows → {len(documents)} documents",
+                data={"groups": len(groups)},
+            )
+
+            return {
+                "metadata": {
+                    "source": "tsv_import",
+                    "total_rows": row_number - 1,
+                    "total_documents": len(documents),
+                },
+                "documents": documents,
+            }
+
+        except Exception as e:
+            self.log.error(f"Failed to parse TSV input: {e}")
+            return None
