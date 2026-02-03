@@ -145,6 +145,95 @@ class DocumentCreationOperations(BaseOperation):
 
         return ResolveResult.fail("No partner identifier provided")
 
+    def resolve_delivery_address(
+        self,
+        address_name: str,
+    ) -> ResolveResult:
+        """
+        Resolve a delivery address by name.
+
+        Searches for a partner record (typically a child/contact of the main partner)
+        that matches the given address name. Used for partner_shipping_id.
+
+        Search strategy:
+        1. Exact name match
+        2. If contains comma, try the second part (e.g., "Parent, Child Address")
+        3. Display name (name + city combination)
+
+        Args:
+            address_name: Delivery address name/label to search
+
+        Returns:
+            ResolveResult with partner ID for shipping or error
+        """
+        if not address_name:
+            return ResolveResult.fail("No delivery address provided")
+
+        address_name = address_name.strip()
+
+        # Strategy 1: Exact name match
+        partners = self.odoo.search(
+            self.PARTNER_MODEL, [("name", "=", address_name)]
+        )
+        if len(partners) == 1:
+            return ResolveResult.ok(partners[0])
+        if len(partners) > 1:
+            return ResolveResult.multiple(partners)
+
+        # Strategy 2: If contains comma, try the second part
+        # Format might be "Parent Company, Delivery Address Name"
+        if "," in address_name:
+            parts = address_name.split(",")
+            if len(parts) >= 2:
+                # Try the last part (often the specific address name)
+                specific_name = parts[-1].strip()
+                partners = self.odoo.search(
+                    self.PARTNER_MODEL, [("name", "=", specific_name)]
+                )
+                if len(partners) == 1:
+                    return ResolveResult.ok(partners[0])
+                if len(partners) > 1:
+                    # Try to narrow down with parent name as well
+                    parent_hint = parts[0].strip()
+                    # Remove parenthetical prefix if present, e.g. "(Company) Name"
+                    if ")" in parent_hint:
+                        parent_hint = parent_hint.split(")")[-1].strip()
+
+                    # Search with display_name containing both parts
+                    partners = self.odoo.search(
+                        self.PARTNER_MODEL,
+                        [
+                            ("name", "=", specific_name),
+                            "|",
+                            ("parent_id.name", "ilike", parent_hint),
+                            ("parent_id.display_name", "ilike", parent_hint),
+                        ],
+                    )
+                    if len(partners) == 1:
+                        return ResolveResult.ok(partners[0])
+                    if len(partners) > 1:
+                        return ResolveResult.multiple(partners)
+
+        # Strategy 3: Try display_name search (includes parent name)
+        partners = self.odoo.search(
+            self.PARTNER_MODEL, [("display_name", "=", address_name)]
+        )
+        if len(partners) == 1:
+            return ResolveResult.ok(partners[0])
+        if len(partners) > 1:
+            return ResolveResult.multiple(partners)
+
+        # Strategy 4: Partial/ilike search as last resort
+        partners = self.odoo.search(
+            self.PARTNER_MODEL, [("display_name", "ilike", address_name)], limit=5
+        )
+        if len(partners) == 1:
+            return ResolveResult.ok(partners[0])
+        if len(partners) > 1:
+            return ResolveResult.multiple(partners)
+
+        return ResolveResult.fail(f"Delivery address not found: {address_name}")
+
     def resolve_product(
         self,
         product_id: Optional[int] = None,
@@ -310,6 +399,18 @@ class DocumentCreationOperations(BaseOperation):
                         field="partner_shipping_id",
                         value=str(shipping_partner),
                         error=result.error or "Shipping partner not found",
+                    )
+                )
+        # If no partner_shipping_id but delivery_address is provided, validate it can be resolved
+        elif header.get("delivery_address"):
+            result = self.resolve_delivery_address(header["delivery_address"])
+            if not result.success:
+                errors.append(
+                    ValidationError(
+                        row_number=doc_row,
+                        field="delivery_address",
+                        value=str(header["delivery_address"]),
+                        error=result.error or "Delivery address not found",
                     )
                 )
 
@@ -519,8 +620,22 @@ class DocumentCreationOperations(BaseOperation):
                 order_vals["carrier_id"] = header["carrier_id"]
 
             # --- Delivery/Invoice addresses (if different from partner) ---
+            # If partner_shipping_id is provided directly, use it
             if header.get("partner_shipping_id"):
                 order_vals["partner_shipping_id"] = header["partner_shipping_id"]
+            # Otherwise, if delivery_address is provided, resolve it to partner_shipping_id
+            elif header.get("delivery_address"):
+                delivery_result = self.resolve_delivery_address(header["delivery_address"])
+                if delivery_result.success:
+                    order_vals["partner_shipping_id"] = delivery_result.record_id
+                    self.log.info(
+                        f"Resolved delivery address '{header['delivery_address']}' → partner_shipping_id={delivery_result.record_id}"
+                    )
+                else:
+                    # Log warning but don't fail - use partner_id as fallback
+                    self.log.warning(
+                        f"Could not resolve delivery address '{header['delivery_address']}': {delivery_result.error}. Using partner as shipping address."
+                    )
             if header.get("partner_invoice_id"):
                 order_vals["partner_invoice_id"] = header["partner_invoice_id"]
 
