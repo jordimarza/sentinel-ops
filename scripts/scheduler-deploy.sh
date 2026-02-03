@@ -131,7 +131,7 @@ EOF
                     --time-zone="$TIMEZONE" \
                     --uri="$FUNCTION_URL" \
                     --http-method=POST \
-                    --headers="Content-Type=application/json,X-API-Key=$API_KEY" \
+                    --update-headers="Content-Type=application/json,X-API-Key=$API_KEY" \
                     --message-body="$BODY" \
                     --description="$DESCRIPTION" \
                     --attempt-deadline=1200s \

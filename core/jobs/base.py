@@ -47,6 +47,7 @@ class BaseJob(ABC):
     _job_name: str = ""
     _job_description: str = ""
     _job_tags: list[str] = []
+    _notify_on_success: bool = True  # Send Slack alert on success
 
     # Set by @intervention_detector decorator
     _intervention_config: Optional["InterventionConfig"] = None
@@ -193,6 +194,10 @@ class BaseJob(ABC):
 
             # Log completion
             self.log.job_completed(data=result.to_dict())
+
+            # Alert on success (if enabled for this job)
+            if self._notify_on_success:
+                self.alerter.alert_job_completed(self.ctx, result)
 
             # Write KPIs with Odoo URL for record links
             odoo_url = get_settings().odoo_url

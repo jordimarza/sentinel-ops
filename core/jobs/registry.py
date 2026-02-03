@@ -22,6 +22,7 @@ def register_job(
     description: str = "",
     tags: Optional[list[str]] = None,
     capabilities: Optional["JobCapabilities"] = None,
+    notify_on_success: bool = True,
 ):
     """
     Decorator to register a job class.
@@ -36,6 +37,7 @@ def register_job(
                 models_write=["sale.order.line"],
                 risk_level=RiskLevel.MEDIUM,
             ),
+            notify_on_success=True,  # Set False for frequent/hourly jobs
         )
         class CleanOldOrdersJob(BaseJob):
             ...
@@ -45,6 +47,7 @@ def register_job(
         description: Human-readable description
         tags: Optional tags for categorization
         capabilities: Structured metadata for AI discovery
+        notify_on_success: Send Slack alert on success (default True, set False for hourly jobs)
 
     Returns:
         Decorator function
@@ -57,6 +60,7 @@ def register_job(
         cls._job_description = description
         cls._job_tags = tags or []
         cls._job_capabilities = capabilities
+        cls._notify_on_success = notify_on_success
 
         # Only register if not already registered (prevents warning on __main__ reimport)
         if job_name not in JOB_REGISTRY:

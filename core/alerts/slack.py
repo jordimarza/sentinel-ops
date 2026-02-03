@@ -30,7 +30,7 @@ class SlackAlerter:
     def __init__(
         self,
         webhook_url: str,
-        channel: str = "#sentinel-alerts",
+        channel: str = "#alohas-automation-announcements",
         enabled: bool = True,
     ):
         self.webhook_url = webhook_url

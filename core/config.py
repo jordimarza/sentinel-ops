@@ -38,10 +38,17 @@ class Settings:
 
     # Slack alerts
     slack_webhook_url: str = ""
-    slack_channel: str = "#sentinel-alerts"
+    slack_channel: str = "#alohas-automation-announcements"
 
     # GCP
     gcp_project: str = ""
+
+    # FTP connection
+    ftp_host: str = ""
+    ftp_username: str = ""
+    ftp_password: str = ""
+    ftp_port: int = 21
+    ftp_use_tls: bool = False
 
     # Runtime
     environment: str = "development"
@@ -66,8 +73,14 @@ class Settings:
             bq_audit_table=os.getenv("BQ_AUDIT_TABLE", "audit_log"),
             bq_kpi_table=os.getenv("BQ_KPI_TABLE", "job_kpis"),
             slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL", ""),
-            slack_channel=os.getenv("SLACK_CHANNEL", "#sentinel-alerts"),
+            slack_channel=os.getenv("SLACK_CHANNEL", "#alohas-automation-announcements"),
             gcp_project=os.getenv("GCP_PROJECT", ""),
+            # FTP
+            ftp_host=os.getenv("FTP_HOST", ""),
+            ftp_username=os.getenv("FTP_USERNAME", ""),
+            ftp_password=os.getenv("FTP_PASSWORD", ""),
+            ftp_port=int(os.getenv("FTP_PORT", "21")),
+            ftp_use_tls=os.getenv("FTP_USE_TLS", "").lower() == "true",
             environment=os.getenv("ENVIRONMENT", "development"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )
@@ -118,8 +131,14 @@ class Settings:
             bq_audit_table=get_secret("bq-audit-table", "audit_log"),
             bq_kpi_table=get_secret("bq-kpi-table", "job_kpis"),
             slack_webhook_url=get_secret("slack-webhook-url"),
-            slack_channel=get_secret("slack-channel", "#sentinel-alerts"),
+            slack_channel=get_secret("slack-channel", "#alohas-automation-announcements"),
             gcp_project=project_id,
+            # FTP
+            ftp_host=get_secret("ftp-host"),
+            ftp_username=get_secret("ftp-username"),
+            ftp_password=get_secret("ftp-password"),
+            ftp_port=int(get_secret("ftp-port", "21") or "21"),
+            ftp_use_tls=get_secret("ftp-use-tls", "").lower() == "true",
             environment=os.getenv("ENVIRONMENT", "production"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )
