@@ -14,12 +14,12 @@
 #   "0 8 * * 1-5"   = Weekdays at 8:00 AM
 #   "*/30 * * * *"  = Every 30 minutes
 
-project: alohas-analytics
+project: alohas-automation
 region: europe-west1
 timezone: Europe/Madrid
 
-# Cloud Function URL
-function_url: https://sentinel-ops-659945993606.europe-west1.run.app/execute
+# Cloud Run URL
+function_url: https://sentinel-ops-gytcsqwgta-ew.a.run.app/execute
 
 schedules:
   # Date Compliance - runs all 3 jobs in sequence
@@ -97,3 +97,15 @@ schedules:
       limit: 100
     enabled: false  # Disabled by default - destructive
     description: "Clean old draft/cancelled orders"
+
+  # Generate packing list PDFs from FTP CSV files
+  - name: sentinel-generate-packing-pdfs
+    schedule: "0 */2 * * *"  # Every 2 hours
+    job: generate_packing_list_pdfs
+    params:
+      limit: 50
+    enabled: false  # Disabled by default - requires FTP setup
+    description: "Generate PDF packing lists from FTP CSV files"
+
+# On-demand jobs (not scheduled):
+#   - create_documents: Called via HTTP when n8n/MCP needs to create orders/pickings
