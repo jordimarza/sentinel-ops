@@ -148,20 +148,22 @@ class DocumentCreationOperations(BaseOperation):
     def resolve_delivery_address(
         self,
         address_name: str,
+        parent_partner_id: Optional[int] = None,
     ) -> ResolveResult:
         """
-        Resolve a delivery address by name.
+        Resolve a delivery address by exact name match.
 
-        Searches for a partner record (typically a child/contact of the main partner)
-        that matches the given address name. Used for partner_shipping_id.
+        MANDATORY: The delivery address must be a child (or grandchild) of the
+        parent partner. This ensures we only match addresses that belong to the
+        customer placing the order.
 
         Search strategy:
-        1. Exact name match
-        2. If contains comma, try the second part (e.g., "Parent, Child Address")
-        3. Display name (name + city combination)
+        1. If parent_partner_id provided: search children and grandchildren only
+        2. Match by exact name (trying full name, then last part after comma)
 
         Args:
             address_name: Delivery address name/label to search
+            parent_partner_id: The main partner ID - delivery must be a child of this
 
         Returns:
             ResolveResult with partner ID for shipping or error
@@ -171,68 +173,74 @@ class DocumentCreationOperations(BaseOperation):
 
         address_name = address_name.strip()
 
-        # Strategy 1: Exact name match
-        partners = self.odoo.search(
-            self.PARTNER_MODEL, [("name", "=", address_name)]
-        )
-        if len(partners) == 1:
-            return ResolveResult.ok(partners[0])
-        if len(partners) > 1:
-            return ResolveResult.multiple(partners)
-
-        # Strategy 2: If contains comma, try the second part
-        # Format might be "Parent Company, Delivery Address Name"
+        # Build list of name variants to try (exact matches only)
+        name_variants = [address_name]
         if "," in address_name:
-            parts = address_name.split(",")
-            if len(parts) >= 2:
-                # Try the last part (often the specific address name)
-                specific_name = parts[-1].strip()
+            parts = [p.strip() for p in address_name.split(",")]
+            for part in reversed(parts):
+                if not part:
+                    continue
+                # Remove parenthetical prefix: "(Company) Name" -> "Name"
+                clean_part = part
+                if ")" in part and part.startswith("("):
+                    clean_part = part.split(")")[-1].strip()
+                if clean_part and clean_part not in name_variants:
+                    name_variants.append(clean_part)
+
+        # If no parent constraint, just do exact match (legacy behavior)
+        if not parent_partner_id:
+            for name in name_variants:
                 partners = self.odoo.search(
-                    self.PARTNER_MODEL, [("name", "=", specific_name)]
+                    self.PARTNER_MODEL, [("name", "=", name)], limit=10
                 )
                 if len(partners) == 1:
                     return ResolveResult.ok(partners[0])
                 if len(partners) > 1:
-                    # Try to narrow down with parent name as well
-                    parent_hint = parts[0].strip()
-                    # Remove parenthetical prefix if present, e.g. "(Company) Name"
-                    if ")" in parent_hint:
-                        parent_hint = parent_hint.split(")")[-1].strip()
+                    return ResolveResult.multiple(partners)
+            return ResolveResult.fail(
+                f"Delivery address not found: {address_name}. "
+                "Use delivery_address_id for explicit mapping."
+            )
 
-                    # Search with display_name containing both parts
-                    partners = self.odoo.search(
-                        self.PARTNER_MODEL,
-                        [
-                            ("name", "=", specific_name),
-                            "|",
-                            ("parent_id.name", "ilike", parent_hint),
-                            ("parent_id.display_name", "ilike", parent_hint),
-                        ],
-                    )
-                    if len(partners) == 1:
-                        return ResolveResult.ok(partners[0])
-                    if len(partners) > 1:
-                        return ResolveResult.multiple(partners)
-
-        # Strategy 3: Try display_name search (includes parent name)
-        partners = self.odoo.search(
-            self.PARTNER_MODEL, [("display_name", "=", address_name)]
+        # With parent constraint: search children and grandchildren
+        # Step 1: Get direct children of parent
+        children = self.odoo.search(
+            self.PARTNER_MODEL, [("parent_id", "=", parent_partner_id)]
         )
-        if len(partners) == 1:
-            return ResolveResult.ok(partners[0])
-        if len(partners) > 1:
-            return ResolveResult.multiple(partners)
 
-        # Strategy 4: Partial/ilike search as last resort
-        partners = self.odoo.search(
-            self.PARTNER_MODEL, [("display_name", "ilike", address_name)], limit=5
+        # Step 2: Get grandchildren (children of children)
+        grandchildren = []
+        if children:
+            grandchildren = self.odoo.search(
+                self.PARTNER_MODEL, [("parent_id", "in", children)]
+            )
+
+        # All valid IDs (children + grandchildren)
+        valid_ids = set(children + grandchildren)
+
+        if not valid_ids:
+            return ResolveResult.fail(
+                f"Partner {parent_partner_id} has no child addresses. "
+                "Use delivery_address_id for explicit mapping."
+            )
+
+        # Search for exact name match within valid children/grandchildren
+        for name in name_variants:
+            partners = self.odoo.search(
+                self.PARTNER_MODEL,
+                [("id", "in", list(valid_ids)), ("name", "=", name)],
+                limit=10
+            )
+            if len(partners) == 1:
+                return ResolveResult.ok(partners[0])
+            if len(partners) > 1:
+                return ResolveResult.multiple(partners)
+
+        # Not found - provide helpful error
+        return ResolveResult.fail(
+            f"Delivery address '{address_name}' not found as child of partner {parent_partner_id}. "
+            "Use delivery_address_id for explicit mapping."
         )
-        if len(partners) == 1:
-            return ResolveResult.ok(partners[0])
-        if len(partners) > 1:
-            return ResolveResult.multiple(partners)
-
-        return ResolveResult.fail(f"Delivery address not found: {address_name}")
 
     def resolve_product(
         self,
@@ -402,8 +410,13 @@ class DocumentCreationOperations(BaseOperation):
                     )
                 )
         # If no partner_shipping_id but delivery_address is provided, validate it can be resolved
+        # Delivery address MUST be a child of the main partner
         elif header.get("delivery_address"):
-            result = self.resolve_delivery_address(header["delivery_address"])
+            parent_id = header.get("partner_id")
+            result = self.resolve_delivery_address(
+                header["delivery_address"],
+                parent_partner_id=parent_id
+            )
             if not result.success:
                 errors.append(
                     ValidationError(
@@ -624,17 +637,23 @@ class DocumentCreationOperations(BaseOperation):
             if header.get("partner_shipping_id"):
                 order_vals["partner_shipping_id"] = header["partner_shipping_id"]
             # Otherwise, if delivery_address is provided, resolve it to partner_shipping_id
+            # Delivery address MUST be a child of the main partner
             elif header.get("delivery_address"):
-                delivery_result = self.resolve_delivery_address(header["delivery_address"])
+                delivery_result = self.resolve_delivery_address(
+                    header["delivery_address"],
+                    parent_partner_id=partner_result.record_id
+                )
                 if delivery_result.success:
                     order_vals["partner_shipping_id"] = delivery_result.record_id
                     self.log.info(
                         f"Resolved delivery address '{header['delivery_address']}' → partner_shipping_id={delivery_result.record_id}"
                     )
                 else:
-                    # Log warning but don't fail - use partner_id as fallback
-                    self.log.warning(
-                        f"Could not resolve delivery address '{header['delivery_address']}': {delivery_result.error}. Using partner as shipping address."
+                    # Fail if delivery address cannot be resolved - don't silently use wrong address
+                    return OperationResult.fail(
+                        model=self.SO_MODEL,
+                        action="create",
+                        error=f"Delivery address resolution failed: {delivery_result.error}",
                     )
             if header.get("partner_invoice_id"):
                 order_vals["partner_invoice_id"] = header["partner_invoice_id"]

@@ -201,9 +201,10 @@ Per-Job Examples (CLI + curl):
     curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
       -d '{{"job":"adjust_closed_order_quantities","dry_run":true,"params":{{"limit":10}}}}'
 
-  complete_shipping_only_orders:
-    python main.py run complete_shipping_only_orders --dry-run
+  complete_shipping_only_orders (default: B2B orders S%, newest first):
+    python main.py run complete_shipping_only_orders --dry-run --limit 10
     python main.py run complete_shipping_only_orders --dry-run order_ids=745296
+    python main.py run complete_shipping_only_orders --dry-run order_name_pattern=% --limit 10  # All orders
     curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
       -d '{{"job":"complete_shipping_only_orders","dry_run":true,"params":{{"limit":10}}}}'
 
@@ -213,12 +214,28 @@ Per-Job Examples (CLI + curl):
     curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
       -d '{{"job":"clean_empty_draft_transfers","dry_run":true,"params":{{"limit":10}}}}'
 
-  create_documents (validates then creates sale.order/stock.picking from JSON):
+  create_documents (validates then creates sale.order/stock.picking from JSON or TSV):
     python main.py run create_documents --dry-run file=/path/to/import.json
-    python main.py run create_documents file=/path/to/import.json
+    python main.py run create_documents --dry-run file=/path/to/import.tsv
+    python main.py run create_documents file=/path/to/import.json confirm=true
     python main.py run create_documents --dry-run 'json_input={{"metadata":{{"source":"test"}},"documents":[...]}}'
+    python main.py run create_documents --dry-run 'tsv_input=document_type\\tpartner_name\\t...'
     curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
       -d '{{"job":"create_documents","dry_run":true,"params":{{"file":"/path/to/import.json"}}}}'
+
+    TSV template columns: document_type, partner_name, delivery_address, product_sku,
+                          quantity, commitment_date, scheduled_date, notes
+    - Rows are auto-grouped by (document_type, partner_name, delivery_address)
+    - delivery_address is resolved to partner_shipping_id
+    - Date fallback: if only one date provided, it's used for the correct field
+      (commitment_date for sale.order, scheduled_date for stock.picking)
+
+  generate_packing_list_pdfs (FTP CSV to PDF conversion):
+    python main.py run generate_packing_list_pdfs --dry-run
+    python main.py run generate_packing_list_pdfs --dry-run --limit 5
+    python main.py run generate_packing_list_pdfs --dry-run subfolder=customer_xyz
+    curl -X POST {base_url}/execute -H "Content-Type: application/json" \\
+      -d '{{"job":"generate_packing_list_pdfs","dry_run":true,"params":{{"limit":10}}}}'
 
 General:
     python main.py list                              # List all jobs
