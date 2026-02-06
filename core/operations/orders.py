@@ -227,6 +227,7 @@ class OrderOperations(BaseOperation):
         shipping_product_ids: list[int],
         limit: Optional[int] = None,
         order_ids: Optional[list[int]] = None,
+        order_name_pattern: Optional[str] = "S%",
     ) -> list[dict]:
         """
         Find orders where the ONLY pending delivery items are shipping fee products.
@@ -235,22 +236,18 @@ class OrderOperations(BaseOperation):
         - It has at least one shipping line with qty_delivered < product_uom_qty
         - ALL non-shipping lines have qty_delivered >= product_uom_qty
 
+        Results are ordered by most recent first (create_date desc), so over
+        successive runs the job naturally works through the backlog.
+
         Args:
             shipping_product_ids: Product IDs that represent shipping fees
             limit: Maximum number of orders to return
             order_ids: Optional list of specific order IDs to check
+            order_name_pattern: Filter orders by name pattern (Odoo =like).
+                                Defaults to "S%" (B2B). Use None for all orders.
 
         Returns:
-            List of dicts with order info and their pending shipping lines:
-            [
-                {
-                    "order_id": 123,
-                    "order_name": "S00455346",
-                    "pending_shipping_lines": [
-                        {"id": 456, "product_id": 15743, "product_uom_qty": 1.0, "qty_delivered": 0.0}
-                    ]
-                }
-            ]
+            List of dicts with order info and their pending shipping lines
         """
         self.log.info(
             "Searching for orders with only shipping pending",
@@ -258,23 +255,35 @@ class OrderOperations(BaseOperation):
                 "shipping_product_ids": shipping_product_ids,
                 "limit": limit,
                 "order_ids": order_ids,
+                "order_name_pattern": order_name_pattern,
             },
         )
 
         try:
             # Step 1: Find pending shipping lines (qty_delivered < product_uom_qty)
+            # Filter qty_delivered=0 in domain (most common pending case for shipping)
+            # then verify in Python for partial deliveries
             shipping_domain = [
                 ("product_id", "in", shipping_product_ids),
                 ("order_id.state", "=", "sale"),
+                ("qty_delivered", "=", 0),
             ]
+
+            if order_name_pattern:
+                shipping_domain.append(("order_id.name", "=like", order_name_pattern))
 
             if order_ids:
                 shipping_domain.append(("order_id", "in", order_ids))
 
+            # Apply limit to Odoo query to bound memory usage
+            search_limit = limit * 10 if limit else 1000
+
             shipping_lines = self.odoo.search_read(
                 self.SO_LINE_MODEL,
                 shipping_domain,
-                fields=["id", "order_id", "product_id", "product_uom_qty", "qty_delivered", "name"],
+                fields=["id", "order_id", "product_id", "product_uom_qty", "qty_delivered"],
+                limit=search_limit,
+                order="create_date desc",
             )
 
             # Filter to only pending shipping lines (qty_delivered < product_uom_qty)

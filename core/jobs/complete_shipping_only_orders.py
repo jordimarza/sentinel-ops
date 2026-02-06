@@ -92,6 +92,7 @@ class CompleteShippingOnlyOrdersJob(BaseJob):
         shipping_product_ids: Optional[list[int]] = None,
         limit: Optional[int] = None,
         order_ids: Optional[list[int]] = None,
+        order_name_pattern: Optional[str] = "S%",
         **_params
     ) -> JobResult:
         """
@@ -102,6 +103,8 @@ class CompleteShippingOnlyOrdersJob(BaseJob):
                                   Defaults to ALOHAS standard shipping products
             limit: Maximum number of orders to process
             order_ids: Optional list of specific order IDs to process (for testing)
+            order_name_pattern: Filter orders by name pattern (Odoo =like).
+                                Defaults to "S%" (B2B). Use None for all orders.
 
         Returns:
             JobResult with execution details
@@ -111,6 +114,7 @@ class CompleteShippingOnlyOrdersJob(BaseJob):
             "shipping_product_ids": shipping_product_ids,
             "limit": limit,
             "order_ids": order_ids,
+            "order_name_pattern": order_name_pattern,
         })
 
         # Use default shipping product IDs if not provided
@@ -127,6 +131,7 @@ class CompleteShippingOnlyOrdersJob(BaseJob):
                 "shipping_product_ids": shipping_product_ids,
                 "limit": limit,
                 "order_ids": order_ids,
+                "order_name_pattern": order_name_pattern,
             },
         )
 
@@ -135,6 +140,7 @@ class CompleteShippingOnlyOrdersJob(BaseJob):
                 shipping_product_ids=shipping_product_ids,
                 limit=limit,
                 order_ids=order_ids,
+                order_name_pattern=order_name_pattern,
             )
         except Exception as e:
             self.log.error("Failed to find qualifying orders", error=str(e))
@@ -232,9 +238,9 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Use main.py to run jobs (avoids import warnings):")
     print("=" * 60)
-    print("\n  python main.py run complete_shipping_only_orders --dry-run")
+    print("\n  python main.py run complete_shipping_only_orders --dry-run --limit 10")
     print("  python main.py run complete_shipping_only_orders --dry-run order_ids=455346")
-    print("  python main.py run complete_shipping_only_orders --dry-run limit=10")
+    print("  python main.py run complete_shipping_only_orders --dry-run order_name_pattern=% --limit 10  # All orders")
     print("  python main.py run complete_shipping_only_orders order_ids=455346  # Live!")
     print("\n" + "=" * 60 + "\n")
     sys.exit(0)
